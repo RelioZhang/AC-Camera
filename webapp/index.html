@@ -42,6 +42,7 @@
     <button data-cmd="demo">载入示例项目</button>
     <div class="menu-sep"></div>
     <button data-cmd="import">导入数据 (JSON)…</button>
+    <button data-cmd="import-points">导入测点表 (JSON/CSV)…</button>
     <button data-cmd="export">导出数据 (JSON)…</button>
     <div class="menu-sep"></div>
     <button data-cmd="export-img">导出图像 (PNG)…</button>
@@ -199,6 +200,7 @@
             <button data-cmd="basemap">导入底图</button>
             <button data-cmd="calibrate">两点定标</button>
             <button data-cmd="noise">识别噪声源</button>
+            <button data-cmd="zoom-fit">适应全图</button>
           </div>
           <div id="contour-canvas-wrap" class="canvas-wrap"></div>
           <aside id="right-dock">
@@ -315,6 +317,8 @@
     <div class="m-sheet-body">
       <button class="m-big" data-cmd="basemap"><span class="m-big-ico">▤</span>导入底图</button>
       <button class="m-big" data-cmd="calibrate"><span class="m-big-ico">⟷</span>两点定标</button>
+      <button class="m-big" data-cmd="import-points"><span class="m-big-ico">▦</span>导入测点表</button>
+      <button class="m-big" data-cmd="zoom-fit"><span class="m-big-ico">⤢</span>适应全图</button>
       <button class="m-big" data-cmd="noise"><span class="m-big-ico">◎</span>识别噪声源</button>
       <button class="m-big" data-cmd="export-img"><span class="m-big-ico">▧</span>导出图像</button>
       <button class="m-big" data-cmd="export-pdf"><span class="m-big-ico">▨</span>导出 PDF</button>
@@ -354,6 +358,9 @@
     <label>声压级 (dB，声级计实测值)
       <input id="pd-spl" type="number" step="0.1" />
     </label>
+    <label>测点编号（图上显示在数值下方）
+      <input id="pd-label" placeholder="如 1 / A3" />
+    </label>
     <label>备注（设备 / 工况）
       <input id="pd-note" />
     </label>
@@ -366,6 +373,7 @@
 </dialog>
 
 <input type="file" id="import-file" accept=".json" hidden />
+<input type="file" id="points-file" accept=".json,.csv,.txt,text/csv,text/plain" hidden />
 <input type="file" id="basemap-file" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.pdf,.dxf" hidden />
 <script type="module" src="/src/main.ts"></script>
 </body>

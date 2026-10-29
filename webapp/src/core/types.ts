@@ -51,6 +51,15 @@ export interface Measurement {
   y: number;
   spl: number;
   note: string;
+  /** 测点编号（图上的点名，例如 1、2、A3）；导入点位表时填充，可空 */
+  label?: string;
+  /**
+   * 底图归一化锚点（0..1，左上为原点）。
+   * 有锚点时 x/y 由锚点与底图落位推导（见 core/basemap.ts），
+   * 所以重新定标、微调对齐后测点会跟着底图走，跨设备打开也不错位。
+   */
+  bu?: number;
+  bv?: number;
   isNoiseSource?: boolean;
   /** 旧版网格坐标，仅迁移时使用 */
   col?: number;

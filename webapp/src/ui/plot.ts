@@ -10,7 +10,7 @@ export interface Transform {
   panY: number;
 }
 
-export const MIN_ZOOM = 1;
+export const MIN_ZOOM = 0.2;
 export const MAX_ZOOM = 20;
 
 export class PlotCanvas {
@@ -39,6 +39,12 @@ export class PlotCanvas {
   private draggingPoint = false;
   cols = 10;
   rows = 10;
+  /**
+   * 图纸的米制宽高比（W/H）。设置后纸张按该比例适配画布，
+   * 底图落位因此只由项目数据决定，不再随窗口/手机尺寸漂移
+   * （导入的点位锚定在底图上，跨设备打开才不会错位）。
+   */
+  worldAspect = 0;
   onZoomChange: ((z: number) => void) | null = null;
 
   constructor(wrap: HTMLElement) {
@@ -165,12 +171,9 @@ export class PlotCanvas {
     this.onPaint = fn;
   }
 
+  /** 适应全部内容（纸张 + 可能溢出的底图）；无溢出时等价于 1:1 居中。 */
   fit(): void {
-    this.transform.zoom = 1;
-    this.transform.panX = 0;
-    this.transform.panY = 0;
-    this.paint();
-    this.onZoomChange?.(1);
+    this.fitToContent();
   }
 
   zoomStep(factor: number): void {
@@ -193,13 +196,62 @@ export class PlotCanvas {
     this.onZoomChange?.(nz);
   }
 
+  /**
+   * 可浏览内容范围（归一化 0..1，可超出纸面）。
+   * 底图按定标放大后可能超出纸面，此时缩放/平移边界要按「内容」算，
+   * 否则超出部分永远看不到、也点不到。
+   */
+  contentRect = { u0: 0, v0: 0, u1: 1, v1: 1 };
+
+  /** 内容相对纸张是否溢出（用于状态提示/自动适配）。 */
+  contentOverflow(): boolean {
+    const c = this.contentRect;
+    return c.u0 < -1e-6 || c.v0 < -1e-6 || c.u1 > 1 + 1e-6 || c.v1 > 1 + 1e-6;
+  }
+
+  /** 让全部内容（纸张 + 溢出底图）刚好放进视口。 */
+  fitToContent(): void {
+    const rect = this.viewport();
+    const c = this.contentRect;
+    const cw = Math.max(1e-6, c.u1 - c.u0);
+    const ch = Math.max(1e-6, c.v1 - c.v0);
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min(1 / cw, 1 / ch)));
+    this.transform.zoom = z;
+    const w = rect.width * z;
+    const h = rect.height * z;
+    // 内容居中：内容左边界对应 panX + c.u0*w = 0，再整体居中
+    this.transform.panX = -c.u0 * w + (rect.width - cw * w) / 2;
+    this.transform.panY = -c.v0 * h + (rect.height - ch * h) / 2;
+    this.clampPan();
+    this.paint();
+    this.onZoomChange?.(this.transform.zoom);
+  }
+
   private clampPan(): void {
     const rect = this.viewport();
-    const w = rect.width * this.transform.zoom;
-    const h = rect.height * this.transform.zoom;
-    // 保证测量区域始终盖住视口（zoom≥1）
-    this.transform.panX = Math.min(0, Math.max(rect.width - w, this.transform.panX));
-    this.transform.panY = Math.min(0, Math.max(rect.height - h, this.transform.panY));
+    const z = this.transform.zoom;
+    const w = rect.width * z;
+    const h = rect.height * z;
+    const c = this.contentRect;
+
+    // 内容比视口大：允许平移到内容任一边缘；比对：
+    // 内容左边缘像素 = panX + c.u0*w，要求 <= 0 且右边缘 >= rect.width
+    const minPanX = rect.width - c.u1 * w;
+    const maxPanX = -c.u0 * w;
+    if (w <= rect.width && (c.u1 - c.u0) * w <= rect.width + 0.5) {
+      // 内容比视口窄：居中
+      this.transform.panX = (rect.width - (c.u1 - c.u0) * w) / 2 - c.u0 * w;
+    } else {
+      this.transform.panX = Math.min(maxPanX, Math.max(minPanX, this.transform.panX));
+    }
+
+    const minPanY = rect.height - c.v1 * h;
+    const maxPanY = -c.v0 * h;
+    if (h <= rect.height && (c.v1 - c.v0) * h <= rect.height + 0.5) {
+      this.transform.panY = (rect.height - (c.v1 - c.v0) * h) / 2 - c.v0 * h;
+    } else {
+      this.transform.panY = Math.min(maxPanY, Math.max(minPanY, this.transform.panY));
+    }
   }
 
   /** 当前视口内测量区域的基准矩形（未含缩放平移）。 */
@@ -209,9 +261,20 @@ export class PlotCanvas {
     const padR = this.padRight;
     const availW = Math.max(1, width - pad - padR);
     const availH = Math.max(1, height - 2 * pad);
-    const cell = Math.min(availW / this.cols, availH / this.rows);
-    const w = cell * this.cols;
-    const h = cell * this.rows;
+
+    // 纸张按真实宽高比适配；未设置时退回旧的「网格等分」规则
+    const aspect = this.worldAspect > 0
+      ? this.worldAspect
+      : (this.cols > 0 && this.rows > 0 ? this.cols / this.rows : 1);
+    let w = availW;
+    let h = w / aspect;
+    if (h > availH) {
+      h = availH;
+      w = h * aspect;
+    }
+    // 极小画布时保证还有可绘制区域
+    if (!(w > 1) || !(h > 1)) { w = availW; h = availH; }
+
     const left = pad + (availW - w) / 2;
     const top = pad + (availH - h) / 2;
     return { left, top, width: w, height: h };
@@ -255,6 +318,7 @@ export class PlotCanvas {
     this.canvas.style.width = `${wrap.clientWidth}px`;
     this.canvas.style.height = `${wrap.clientHeight}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.clampPan();   // 画布尺寸变了，平移量要重新夹紧
     this.paint();
   }
 

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NoiseAtlas · 载入演示数据</title>
+<style>
+  :root { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #eef1f5; color: #22303f; }
+  .card { background: #fff; border-radius: 16px; padding: 22px 24px; width: min(90vw, 420px);
+          box-shadow: 0 10px 30px rgba(20,32,48,.14); }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  p { font-size: 13px; line-height: 1.6; color: #5b6673; margin: 6px 0 14px; }
+  label { display: block; font-size: 12.5px; color: #4b5563; margin: 10px 0 4px; }
+  input[type="number"] { width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 14px;
+          border: 1px solid #d5dbe3; border-radius: 8px; }
+  button { width: 100%; margin-top: 16px; padding: 12px; font-size: 15px; border: none;
+           border-radius: 10px; background: #07c160; color: #fff; font-weight: 600; }
+  .hint { font-size: 12px; color: #8b9098; margin-top: 10px; line-height: 1.5; }
+  code { background: #f1f3f6; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>NoiseAtlas 演示数据</h1>
+  <p>生成一个「常减压装置区」演示项目：带轴线与设备的平面图 + 40 个测点（含编号与声压级），
+     用来展示录入、等声压级图、噪声源识别与出图。</p>
+
+  <label>底图缩放（模拟「两点定标后底图放大」）</label>
+  <input id="scale" type="number" step="0.1" min="0.2" max="5" value="1" />
+  <label>底图水平偏移（-0.5 ~ 0.5，可选）</label>
+  <input id="ox" type="number" step="0.05" min="-0.5" max="0.5" value="0" />
+
+  <button id="go">生成并打开</button>
+  <div class="hint">数值为演示用的示例数据，不代表真实检测结果。<br />
+    生成后可点「适应全图」查看完整底图。</div>
+</div>
+<script>
+(function () {
+  const KEY = 'ac-camera-web-data-v2';
+  const LAST = 'noiseatlas-last-project';
+  const qs = new URLSearchParams(location.search);
+  const scaleEl = document.getElementById('scale');
+  const oxEl = document.getElementById('ox');
+  if (qs.has('scale')) scaleEl.value = qs.get('scale');
+  if (qs.has('ox')) oxEl.value = qs.get('ox');
+
+  // ── 画一张工程平面图（白底 + 轴线 + 设备 + 图框）──
+  function drawPlan() {
+    const W = 900, H = 1260;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const c = cv.getContext('2d');
+
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, W, H);
+
+    // 图框
+    c.strokeStyle = '#2f3d4c'; c.lineWidth = 3;
+    c.strokeRect(28, 28, W - 56, H - 56);
+    c.strokeStyle = '#c8d2dd'; c.lineWidth = 1;
+    c.strokeRect(44, 44, W - 88, H - 88);
+
+    // 轴线网格
+    const x0 = 70, y0 = 70, x1 = W - 70, y1 = H - 70;
+    const cols = 8, rows = 11;
+    c.strokeStyle = '#dfe6ee'; c.lineWidth = 1;
+    for (let i = 0; i <= cols; i++) {
+      const x = x0 + ((x1 - x0) / cols) * i;
+      c.beginPath(); c.moveTo(x, y0); c.lineTo(x, y1); c.stroke();
+    }
+    for (let j = 0; j <= rows; j++) {
+      const y = y0 + ((y1 - y0) / rows) * j;
+      c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); c.stroke();
+    }
+    // 轴号
+    c.fillStyle = '#9aa7b4'; c.font = '13px "Segoe UI", system-ui'; c.textAlign = 'center';
+    for (let i = 0; i <= cols; i++) {
+      const x = x0 + ((x1 - x0) / cols) * i;
+      c.fillText(String(i + 1), x, y0 - 14);
+      c.fillText(String(i + 1), x, y1 + 22);
+    }
+    c.textAlign = 'right';
+    for (let j = 0; j <= rows; j++) {
+      const y = y0 + ((y1 - y0) / rows) * j;
+      c.fillText(String.fromCharCode(65 + j), x0 - 12, y + 5);
+    }
+
+    // 设备
+    const equip = [
+      { x: 250, y: 150, w: 120, h: 120, t: '常压塔' },
+      { x: 420, y: 150, w: 120, h: 120, t: '减压塔' },
+      { x: 610, y: 200, w: 150, h: 90, t: '加热炉' },
+      { x: 110, y: 360, w: 170, h: 90, t: '换热器区' },
+      { x: 330, y: 380, w: 150, h: 130, t: '泵区' },
+      { x: 540, y: 400, w: 190, h: 100, t: '空冷器' },
+      { x: 120, y: 620, w: 120, h: 180, t: '回流罐' },
+      { x: 300, y: 660, w: 200, h: 110, t: '压缩机房' },
+      { x: 560, y: 660, w: 160, h: 150, t: '控制室' },
+      { x: 200, y: 900, w: 220, h: 120, t: '产品罐区' },
+      { x: 490, y: 900, w: 190, h: 120, t: '污水处理' },
+      { x: 250, y: 1080, w: 300, h: 80, t: '管廊' },
+    ];
+    for (const e of equip) {
+      c.fillStyle = '#f4f7fa';
+      c.strokeStyle = '#7f8d9c';
+      c.lineWidth = 1.6;
+      c.beginPath();
+      const r = 6;
+      c.moveTo(e.x + r, e.y);
+      c.arcTo(e.x + e.w, e.y, e.x + e.w, e.y + e.h, r);
+      c.arcTo(e.x + e.w, e.y + e.h, e.x, e.y + e.h, r);
+      c.arcTo(e.x, e.y + e.h, e.x, e.y, r);
+      c.arcTo(e.x, e.y, e.x + e.w, e.y, r);
+      c.closePath();
+      c.fill(); c.stroke();
+      c.fillStyle = '#4c5a69';
+      c.font = '17px "Segoe UI", "Microsoft YaHei", system-ui';
+      c.textAlign = 'center';
+      c.fillText(e.t, e.x + e.w / 2, e.y + e.h / 2 + 6);
+    }
+
+    // 指北针 + 图名
+    c.strokeStyle = '#2f3d4c'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(W - 90, 90); c.lineTo(W - 90, 130);
+    c.moveTo(W - 90, 90); c.lineTo(W - 80, 110);
+    c.moveTo(W - 90, 90); c.lineTo(W - 100, 110);
+    c.stroke();
+    c.fillStyle = '#2f3d4c'; c.font = '13px "Segoe UI", system-ui'; c.textAlign = 'center';
+    c.fillText('N', W - 90, 82);
+
+    c.fillStyle = '#2f3d4c';
+    c.font = 'bold 20px "Segoe UI", "Microsoft YaHei", system-ui';
+    c.textAlign = 'left';
+    c.fillText('常减压装置区 · 噪声普查平面图', 70, H - 52);
+    c.font = '13px "Segoe UI", "Microsoft YaHei", system-ui';
+    c.fillStyle = '#7b8794';
+    c.fillText('比例 1:1000（演示底图）', 70, H - 30);
+
+    // 比例尺
+    c.strokeStyle = '#4c5a69'; c.lineWidth = 1.4;
+    c.beginPath(); c.moveTo(W - 300, H - 40); c.lineTo(W - 160, H - 40); c.stroke();
+    for (let i = 0; i <= 4; i++) {
+      const x = W - 300 + i * 35;
+      c.beginPath(); c.moveTo(x, H - 46); c.lineTo(x, H - 34); c.stroke();
+    }
+    c.fillStyle = '#7b8794'; c.font = '11px "Segoe UI", system-ui'; c.textAlign = 'center';
+    c.fillText('0', W - 300, H - 50);
+    c.fillText('20 m', W - 160, H - 50);
+
+    return cv.toDataURL('image/jpeg', 0.82);
+  }
+
+  // ── 40 个测点（编号 + 声压级），按「值在上、编号在下」的现场标注习惯 ──
+  function buildPoints(projectId) {
+    const rows = [
+      { v: 0.13, spl: [64.2, 68.5, 73.1, 78.4, 82.6, 86.2, 84.1, 76.3] },
+      { v: 0.26, spl: [66.8, 71.4, 76.9, 83.5, 88.7, 91.2, 87.4, 78.9] },
+      { v: 0.40, spl: [69.3, 74.6, 80.2, 86.8, 93.4, 95.1, 89.6, 81.2] },
+      { v: 0.54, spl: [70.1, 76.2, 82.7, 88.4, 92.6, 94.8, 88.1, 80.4] },
+      { v: 0.68, spl: [67.5, 72.8, 78.6, 84.2, 87.9, 89.5, 85.3, 77.6] },
+      { v: 0.82, spl: [63.8, 68.1, 72.4, 76.8, 79.3, 81.6, 78.2, 71.5] },
+    ];
+    const out = [];
+    let n = 189;
+    for (const row of rows) {
+      for (let i = 0; i < row.spl.length; i++) {
+        const u = 0.11 + (i + 0.5) * 0.098 + ((n * 7) % 11 - 5) * 0.0022;
+        const v = row.v + ((n * 13) % 9 - 4) * 0.0026;
+        out.push({
+          projectId,
+          id: 'dm' + n,
+          x: 0, y: 0,
+          spl: row.spl[i],
+          note: '',
+          label: String(n),
+          bu: Math.min(0.96, Math.max(0.04, u)),
+          bv: Math.min(0.96, Math.max(0.04, v)),
+        });
+        n++;
+      }
+    }
+    // 把最响的两处标为噪声源
+    const top = [...out].sort((a, b) => b.spl - a.spl).slice(0, 2);
+    for (const t of top) t.isNoiseSource = true;
+    return out;
+  }
+
+  document.getElementById('go').addEventListener('click', () => {
+    const id = Date.now();
+    const now = id;
+    const worldW = 90;
+    const worldH = 126;      // 与底图 900×1260 同比例，缩放 1 时刚好铺满纸面
+    const project = {
+      id,
+      name: '演示 · 常减压装置区',
+      description: '用于功能演示的示例项目（数值为示例数据）',
+      createdAt: now,
+      updatedAt: now,
+      cols: 1, rows: 1,
+      spacingX: worldW, spacingY: worldH,
+      worldW, worldH,
+      backgroundImagePath: null,
+      planReferenceMeters: worldW,
+      overlayAlpha: 0.72,
+      baseMapOffsetX: Number(oxEl.value) || 0,
+      baseMapOffsetY: 0,
+      baseMapScale: Number(scaleEl.value) || 1,
+      backgroundNoiseDb: 55,
+      contourColorBands: 32,
+      backgroundImageData: drawPlan(),
+      backgroundDxfText: null,
+      baseMapCalibration: null,
+    };
+    const measurements = buildPoints(id).map((m) => {
+      // 锚点 → 米制坐标（底图缩放 1 且 aspect 一致时：x = u*W, y = v*H）
+      const s = project.baseMapScale;
+      const w = worldW * s, h = worldH * s;
+      const left = worldW / 2 - w / 2 + project.baseMapOffsetX * worldW;
+      const top = worldH / 2 - h / 2 + project.baseMapOffsetY * worldH;
+      return { ...m, x: left + m.bu * w, y: top + m.bv * h };
+    });
+    const data = [{ project, measurements }];
+    try {
+      localStorage.setItem(KEY, JSON.stringify(data));
+      localStorage.setItem(LAST, String(id));
+    } catch (e) {
+      alert('写入本地数据失败（可能空间不足）：' + e.message);
+      return;
+    }
+    location.replace('./');
+  });
+})();
+</script>
+</body>
+</html>

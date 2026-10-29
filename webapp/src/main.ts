@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { newProject, newPointId, worldSize } from './core/types';
 import type { Project, ProjectWithMeasurements, Measurement } from './core/types';
+import { anchorToMeters, baseMapRectMeters } from './core/basemap';
 import { bandColors, colormap, computeSplFieldPoints, fieldDomain, quantizeStep, renderFieldImageData } from './core/field';
 import type { SplPoint } from './core/field';
 import type { FieldResult } from './core/field';
@@ -117,37 +118,88 @@ function refreshBasemapCache(p: Project): void {
     img.src = p.backgroundImageData;
     img.decode().then(() => {
       bmImage = img;
+      applyAnchors(current());
+      updateContentRect(current());
       entryPlot.paint();
       contourPlot.paint();
     }).catch(() => { bmImage = null; });
   }
 }
 
-function alignBaseMap(fitted: Rect, world: Rect, scale: number, offX: number, offY: number): Rect {
-  const s = Number.isFinite(scale) && scale > 0 ? Math.min(5, Math.max(0.2, scale)) : 1;
-  if (s === 1 && offX === 0 && offY === 0) return fitted;
-  const cx = fitted.left + fitted.width / 2;
-  const cy = fitted.top + fitted.height / 2;
-  const w = fitted.width * s;
-  const h = fitted.height * s;
-  const dx = (Number.isFinite(offX) ? Math.min(0.5, Math.max(-0.5, offX)) : 0) * world.width;
-  const dy = (Number.isFinite(offY) ? Math.min(0.5, Math.max(-0.5, offY)) : 0) * world.height;
-  return { left: cx - w / 2 + dx, top: cy - h / 2 + dy, width: w, height: h };
+/** 当前底图的宽高比（图片用像素比，DXF 用包围盒比）；未导入时返回 0。 */
+function basemapAspect(): number {
+  if (bmCad && bmCad.aspectRatio > 0) return bmCad.aspectRatio;
+  if (bmImage && bmImage.naturalWidth > 0 && bmImage.naturalHeight > 0) {
+    return bmImage.naturalWidth / bmImage.naturalHeight;
+  }
+  return 0;
 }
 
-function containFit(world: Rect, aspect: number): Rect {
-  if (!(aspect > 0)) return world;
-  const w = Math.min(world.width, world.height * aspect);
-  const h = w / aspect;
-  return { left: world.left + (world.width - w) / 2, top: world.top + (world.height - h) / 2, width: w, height: h };
+/**
+ * 把带锚点（bu/bv）的测点按当前底图落位重算米制坐标。
+ * 定标、底图对齐、图纸尺寸变化后都要调用，测点才会跟着底图走。
+ */
+function applyAnchors(item: ProjectWithMeasurements | null): void {
+  if (!item) return;
+  const aspect = basemapAspect();
+  if (!(aspect > 0)) return;
+  let changed = false;
+  for (const m of item.measurements) {
+    if (typeof m.bu === 'number' && typeof m.bv === 'number') {
+      const q = anchorToMeters(item.project, aspect, m.bu, m.bv);
+      if (Math.abs(q.x - m.x) > 1e-6 || Math.abs(q.y - m.y) > 1e-6) {
+        m.x = q.x;
+        m.y = q.y;
+        changed = true;
+      }
+    }
+  }
+  if (changed) splFieldCache = null;
+}
+
+/** 底图在画布上的像素矩形（由米制落位换算，纸张比例固定后结果稳定）。 */
+function basemapRectPx(world: Rect, p: Project): Rect | null {
+  const aspect = basemapAspect();
+  if (!(aspect > 0)) return null;
+  const { w: W, h: H } = worldSize(p);
+  const r = baseMapRectMeters(p, aspect);
+  return {
+    left: world.left + (r.left / W) * world.width,
+    top: world.top + (r.top / H) * world.height,
+    width: (r.width / W) * world.width,
+    height: (r.height / H) * world.height,
+  };
+}
+
+/**
+ * 刷新两张画布的「可浏览内容范围」：纸张 ∪ 溢出底图。
+ * 定标把底图放大后，若仍按纸面限制平移/缩放，底图超出部分就永远看不到，
+ * 表现为「缩放只能到 1.0 倍、图纸也拖不动」。这里把边界放宽到内容实际范围。
+ */
+function updateContentRect(item: ProjectWithMeasurements | null): void {
+  let u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+  if (item) {
+    const aspect = basemapAspect();
+    if (aspect > 0) {
+      const ws = worldSize(item.project);
+      const r = baseMapRectMeters(item.project, aspect);
+      u0 = Math.min(0, r.left / ws.w);
+      v0 = Math.min(0, r.top / ws.h);
+      u1 = Math.max(1, (r.left + r.width) / ws.w);
+      v1 = Math.max(1, (r.top + r.height) / ws.h);
+    }
+  }
+  const c = { u0, v0, u1, v1 };
+  entryPlot.contentRect = c;
+  contourPlot.contentRect = c;
 }
 
 function drawBasemap(ctx: CanvasRenderingContext2D, world: Rect, p: Project): void {
   let dst: Rect | null = null;
   if (bmCad) {
-    dst = alignBaseMap(containFit(world, bmCad.aspectRatio), world, p.baseMapScale, p.baseMapOffsetX, p.baseMapOffsetY);
+    dst = basemapRectPx(world, p);
   } else if (bmImage && bmImage.naturalWidth > 0) {
-    dst = alignBaseMap(containFit(world, bmImage.naturalWidth / bmImage.naturalHeight), world, p.baseMapScale, p.baseMapOffsetX, p.baseMapOffsetY);
+    dst = basemapRectPx(world, p);
   }
   if (!dst) return;
 
@@ -627,12 +679,18 @@ entryPlot.setPainter((world) => {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-    if (item.measurements.length <= 40 || entryPlot.transform.zoom >= 1.8) {
+    if (item.measurements.length <= 70 || entryPlot.transform.zoom >= 1.6) {
       ctx.fillStyle = '#101418';
       ctx.font = 'bold 10px "Segoe UI", system-ui';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
       ctx.fillText(m.spl.toFixed(0), px, py - rad - 2);
+      if (m.label) {
+        ctx.font = '9px "Segoe UI", system-ui';
+        ctx.fillStyle = '#4a5563';
+        ctx.textBaseline = 'top';
+        ctx.fillText(m.label, px, py + rad + 3);
+      }
     }
   }
 
@@ -682,6 +740,53 @@ function pointToPx(world: Rect, p: Project, m: { x: number; y: number }): { x: n
 function pxToMeters(world: Rect, p: Project, u: number, v: number): { x: number; y: number } {
   const ws = worldSize(p);
   return { x: u * ws.w, y: v * ws.h };
+}
+
+/**
+ * 测点标注：数值在上、编号在下（与现场底图的标注习惯一致）。
+ * 点太密或缩放太小时自动省略，避免糊成一片。
+ */
+function drawPointLabels(
+  ctx: CanvasRenderingContext2D,
+  world: Rect,
+  p: Project,
+  item: ProjectWithMeasurements,
+  opts: { value: boolean; label: boolean; zoom: number },
+): void {
+  const n = item.measurements.length;
+  if (n === 0) return;
+  // 缩得太小时全部挤在一起没有可读性：数值按 0.5× 起、编号按 0.9× 起显示
+  const showValue = opts.value && n <= 90 && (opts.zoom >= 0.5 || n <= 20);
+  const showLabel = opts.label && n <= 90 && (opts.zoom >= 0.9 || n <= 12);
+  if (!showValue && !showLabel) return;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.lineJoin = 'round';
+  for (const m of item.measurements) {
+    const { x: px, y: py } = pointToPx(world, p, m);
+    if (px < world.left - 40 || px > world.left + world.width + 40) continue;
+    if (py < world.top - 30 || py > world.top + world.height + 30) continue;
+
+    if (showValue) {
+      const txt = m.spl.toFixed(1).replace(/\.0$/, '');
+      ctx.font = 'bold 10.5px "Segoe UI", system-ui';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+      ctx.strokeText(txt, px, py - 8);
+      ctx.fillStyle = '#1f2733';
+      ctx.fillText(txt, px, py - 8);
+    }
+    if (showLabel && m.label) {
+      ctx.font = '9.5px "Segoe UI", system-ui';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+      ctx.strokeText(m.label, px, py + 15);
+      ctx.fillStyle = '#3a4450';
+      ctx.fillText(m.label, px, py + 15);
+    }
+  }
+  ctx.restore();
 }
 
 // ───────────────────────── 拖动测点 ─────────────────────────
@@ -816,6 +921,7 @@ function openPointDialog(item: ProjectWithMeasurements, x: number, y: number, ex
     `${existing ? '编辑测点' : '新增测点'} · x=${x.toFixed(2)} m  y=${y.toFixed(2)} m`
     + `　（图纸 ${ws.w.toFixed(1)}×${ws.h.toFixed(1)} m）`;
   (document.getElementById('pd-spl') as HTMLInputElement).value = existing ? String(existing.spl) : '';
+  (document.getElementById('pd-label') as HTMLInputElement).value = existing?.label ?? '';
   (document.getElementById('pd-note') as HTMLInputElement).value = existing?.note ?? '';
   (document.getElementById('pd-clear') as HTMLElement).style.display = existing ? '' : 'none';
   dlg.showModal();
@@ -830,17 +936,22 @@ document.getElementById('pd-save')!.addEventListener('click', () => {
   const v = parseFloat((document.getElementById('pd-spl') as HTMLInputElement).value);
   if (Number.isNaN(v)) { dlg.close(); return; }
   const note = (document.getElementById('pd-note') as HTMLInputElement).value;
+  const label = (document.getElementById('pd-label') as HTMLInputElement).value.trim();
   const target = dialogTarget;
   const idx = target.id
     ? item.measurements.findIndex((m) => m.id === target.id)
     : item.measurements.findIndex((m) => Math.hypot(m.x - target.x, m.y - target.y) < 1e-6);
+  const prev = idx >= 0 ? item.measurements[idx] : null;
   const meas: Measurement = {
     projectId: item.project.id,
-    id: idx >= 0 ? item.measurements[idx].id : newPointId(),
+    id: prev ? prev.id : newPointId(),
     x: target.x,
     y: target.y,
     spl: v,
     note,
+    label: label || undefined,
+    // 编辑已锚定的测点时保留锚点，避免它脱离底图
+    ...(prev?.bu !== undefined && prev.bv !== undefined ? { bu: prev.bu, bv: prev.bv } : {}),
   };
   if (idx >= 0) item.measurements[idx] = meas; else item.measurements.push(meas);
   touch(item.project);
@@ -961,6 +1072,11 @@ contourPlot.setPainter((world) => {
         ctx.stroke();
       }
     }
+    drawPointLabels(ctx, world, project, item, {
+      value: true,
+      label: true,
+      zoom: contourPlot.transform.zoom,
+    });
   }
 
   if (prefs.showCalib) drawCalibration(ctx, world, project);
@@ -1137,6 +1253,9 @@ basemapFile.addEventListener('change', async () => {
     refreshBasemapCache(item.project);
     hintBasemap(item.project);
     renderAll();
+    // 底图比纸面大时先适配一次，避免新导入就“看不见全貌”
+    if (contourPlot.contentOverflow()) contourPlot.fit();
+    if (entryPlot.contentOverflow()) entryPlot.fit();
   } catch (err) {
     alert('底图导入失败：' + (err as Error).message);
   }
@@ -1158,7 +1277,10 @@ document.querySelectorAll('[data-bm]').forEach((b) => {
     else if (k === 'reset') { p.baseMapScale = 1; p.baseMapOffsetX = 0; p.baseMapOffsetY = 0; }
     touch(p);
     persist();
+    applyAnchors(item);   // 测点跟着底图走
+    updateContentRect(item);
     hintBasemap(p);
+    renderStats(item);
     entryPlot.paint();
     contourPlot.paint();
   });
@@ -1300,9 +1422,14 @@ contourPlot.onRawTap = async (u, v) => {
   p.planReferenceMeters = W;
   touch(p);
   persist();
+  applyAnchors(item);   // 定标改变底图缩放 => 锚定测点重新落位
+  updateContentRect(item);
   setCalibMode(false);
   hintBasemap(p);
   renderAll();
+  // 定标后底图常会超出纸面：自动按「内容范围」适配一次，
+  // 保证整幅底图与全部测点都落在可视区内（否则会看着像“图飞了”）。
+  if (contourPlot.contentOverflow()) contourPlot.fit();
   alert(`已校准：底图缩放 ×${factor.toFixed(3)}（现为 ${p.baseMapScale.toFixed(2)}×）\n比例尺已按真实米制显示。`);
 };
 
@@ -1654,6 +1781,7 @@ function runCmdInner(cmd: string): void {
     case 'new-project': void createProject(); break;
     case 'demo': createDemo(); break;
     case 'import': (document.getElementById('import-file') as HTMLInputElement).click(); break;
+    case 'import-points': (document.getElementById('points-file') as HTMLInputElement).click(); break;
     case 'export': exportJsonText(JSON.stringify(sortStore(), null, 2)); break;
     case 'export-img': exportImage(); break;
     case 'export-pdf': void exportPdf(); break;
@@ -1763,6 +1891,264 @@ document.getElementById('import-file')!.addEventListener('change', async (e) => 
   }
   input.value = '';
 });
+// ───────────────────────── 测点表导入（点位锚定底图） ─────────────────────────
+
+/**
+ * 支持三种输入，全部落到「底图归一化坐标」或「图纸米制坐标」：
+ * 1) JSON：{ "type":"noiseatlas-points", "points":[{"label":"1","spl":72.4,"u":0.31,"v":0.42}, …] }
+ *    （u,v = 底图图像上的归一化位置，左上为原点；也可用 x,y 表示图纸米制坐标）
+ * 2) JSON 数组：[{"label":"1","spl":72.4,"u":0.31,"v":0.42}, …]
+ * 3) CSV / TXT：每行 `编号,声压级,u,v`（首行可写表头：label,spl,u,v 或 label,spl,x,y）
+ */
+interface RawPointRow {
+  label?: string;
+  spl: number;
+  u?: number;
+  v?: number;
+  x?: number;
+  y?: number;
+}
+
+function pickNum(obj: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const k of keys) {
+    const val = obj[k];
+    if (val === undefined || val === null || val === '') continue;
+    const n = typeof val === 'number' ? val : parseFloat(String(val));
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function pickStr(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const val = obj[k];
+    if (val === undefined || val === null || val === '') continue;
+    return String(val).trim();
+  }
+  return undefined;
+}
+
+function parsePointRows(text: string): RawPointRow[] {
+  const src = text.replace(/^\uFEFF/, '').trim();
+  if (!src) return [];
+
+  const fromObject = (o: Record<string, unknown>): RawPointRow | null => {
+    const spl = pickNum(o, ['spl', 'splDb', 'value', 'db', 'dB', 'noise', '声压级', '噪声值']);
+    if (spl === undefined) return null;
+    const label = pickStr(o, ['label', 'name', 'id', 'point', '编号', '测点', '点名']);
+    const u = pickNum(o, ['u', 'bu', 'nx', 'px']);
+    const v = pickNum(o, ['v', 'bv', 'ny', 'py']);
+    const x = pickNum(o, ['x', 'mx']);
+    const y = pickNum(o, ['y', 'my']);
+    const row: RawPointRow = { spl, label };
+    if (u !== undefined && v !== undefined) { row.u = u; row.v = v; }
+    else if (x !== undefined && y !== undefined) { row.x = x; row.y = y; }
+    else return null;
+    return row;
+  };
+
+  if (src.startsWith('{') || src.startsWith('[')) {
+    const parsed = JSON.parse(src) as unknown;
+    const arr = Array.isArray(parsed)
+      ? parsed
+      : (parsed && Array.isArray((parsed as { points?: unknown[] }).points)
+        ? (parsed as { points: unknown[] }).points
+        : []);
+    const out: RawPointRow[] = [];
+    for (const it of arr) {
+      if (!it || typeof it !== 'object') continue;
+      const row = fromObject(it as Record<string, unknown>);
+      if (row) out.push(row);
+    }
+    return out;
+  }
+
+  // CSV / TXT
+  const lines = src.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+  const splitLine = (l: string): string[] => l.split(/[,;\t]+|\s{2,}/).map((s) => s.trim()).filter((s) => s !== '');
+
+  let cols: string[] | null = null;
+  let start = 0;
+  const head = splitLine(lines[0]).map((s) => s.toLowerCase());
+  if (head.some((h) => ['label', 'spl', 'u', 'v', 'x', 'y', '编号', '声压级'].includes(h))) {
+    cols = head;
+    start = 1;
+  }
+
+  const idx = (names: string[]): number => (cols ? cols.findIndex((c) => names.includes(c)) : -1);
+  const iLabel = cols ? idx(['label', 'name', 'id', 'point', '编号', '测点', '点名']) : 0;
+  const iSpl = cols ? idx(['spl', 'db', 'value', '声压级', '噪声值']) : 1;
+  const iU = cols ? idx(['u', 'bu', 'nx']) : 2;
+  const iV = cols ? idx(['v', 'bv', 'ny']) : 3;
+  const iX = cols ? idx(['x', 'mx']) : -1;
+  const iY = cols ? idx(['y', 'my']) : -1;
+
+  const out: RawPointRow[] = [];
+  for (let i = start; i < lines.length; i++) {
+    const parts = splitLine(lines[i]);
+    if (parts.length < 3) continue;
+    const spl = parseFloat(parts[iSpl] ?? '');
+    if (!Number.isFinite(spl)) continue;
+    const row: RawPointRow = { spl, label: iLabel >= 0 ? parts[iLabel] : undefined };
+    if (iX >= 0 && iY >= 0) {
+      const x = parseFloat(parts[iX] ?? '');
+      const y = parseFloat(parts[iY] ?? '');
+      if (Number.isFinite(x) && Number.isFinite(y)) { row.x = x; row.y = y; }
+    } else {
+      const u = parseFloat(parts[iU] ?? '');
+      const v = parseFloat(parts[iV] ?? '');
+      if (Number.isFinite(u) && Number.isFinite(v)) { row.u = u; row.v = v; }
+    }
+    if (row.u === undefined && row.x === undefined) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+async function importPointRows(file: File): Promise<void> {
+  await importPointRowsFromText(await readJsonFile(file));
+}
+
+/**
+ * 从文本导入测点（文件选择器与调试入口共用）。
+ * 返回导入统计，便于脚本化校验。
+ */
+async function importPointRowsFromText(
+  text: string,
+  opts: { silent?: boolean; replace?: boolean } = {},
+): Promise<{ total: number; anchored: number; skipped: number } | null> {
+  const item = current();
+  if (!item) { if (!opts.silent) alert('请先打开或新建项目'); return null; }
+  const rows = parsePointRows(text);
+  if (rows.length === 0) {
+    if (!opts.silent) alert('没有解析到测点。\n\n支持格式：\n• JSON: {"points":[{"label":"1","spl":72.4,"u":0.31,"v":0.42}]}\n• CSV: 编号,声压级,u,v');
+    return null;
+  }
+
+  const anchored = rows.filter((r) => r.u !== undefined && r.v !== undefined).length;
+  const metric = rows.length - anchored;
+  const hasBase = !!(item.project.backgroundImageData || item.project.backgroundDxfText);
+  if (anchored > 0 && !hasBase && !opts.silent) {
+    const ok = confirm(
+      `这份点位表有 ${anchored} 个点按「底图归一化坐标」定位，但当前还没有导入底图。\n\n`
+      + '继续导入：点位会先按图纸比例摆放，等你导入底图后自动重新对位。\n\n是否继续？',
+    );
+    if (!ok) return null;
+  }
+
+  if (item.measurements.length > 0) {
+    const replace = opts.replace ?? confirm(
+      `当前项目已有 ${item.measurements.length} 个测点。\n\n`
+      + '确定 = 清空后替换\n取消 = 追加到现有测点后面',
+    );
+    if (replace) item.measurements = [];
+  }
+
+  const aspect = basemapAspect();
+  const pid = item.project.id;
+  let skipped = 0;
+  for (const r of rows) {
+    let x: number;
+    let y: number;
+    let bu: number | undefined;
+    let bv: number | undefined;
+    if (r.u !== undefined && r.v !== undefined) {
+      bu = r.u;
+      bv = r.v;
+      const q = anchorToMeters(item.project, aspect > 0 ? aspect : worldSize(item.project).w / worldSize(item.project).h, bu, bv);
+      x = q.x;
+      y = q.y;
+    } else {
+      x = r.x!;
+      y = r.y!;
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(r.spl)) { skipped++; continue; }
+    item.measurements.push({
+      projectId: pid,
+      id: newPointId(),
+      x, y,
+      spl: r.spl,
+      note: '',
+      label: r.label,
+      ...(bu !== undefined && bv !== undefined ? { bu, bv } : {}),
+    });
+  }
+
+  touch(item.project);
+  persist();
+  splFieldCache = null;
+  renderAll();
+  switchTab('contour');
+  if (!opts.silent) {
+    alert(
+      `已导入 ${rows.length} 个测点`
+      + (anchored > 0 ? `\n其中 ${anchored} 个锚定在底图上（定标/对齐后会自动跟随）` : '')
+      + (metric > 0 ? `\n${metric} 个按图纸米制坐标放置` : '')
+      + (skipped > 0 ? `\n跳过 ${skipped} 行（数值无效）` : ''),
+    );
+  }
+  return { total: rows.length, anchored, skipped };
+}
+
+// 调试/脚本入口：便于自动化校验点位表解析（控制台或自动化工具调用）
+(window as unknown as Record<string, unknown>).__naImportPointsText = importPointRowsFromText;
+(window as unknown as Record<string, unknown>).__naParsePoints = parsePointRows;
+
+// 几何调试入口：核对「内容范围 / 视口 / 平移夹紧」等行为（现场问题定位用）
+(window as unknown as Record<string, unknown>).__naDebug = {
+  view: () => ({
+    zoom: contourPlot.transform.zoom,
+    panX: contourPlot.transform.panX,
+    panY: contourPlot.transform.panY,
+    content: contourPlot.contentRect,
+    world: contourPlot.worldRect(),
+    viewport: contourPlot.viewport(),
+    overflow: contourPlot.contentOverflow(),
+  }),
+  fit: () => { contourPlot.fit(); entryPlot.fit(); },
+  setBaseMapScale: (s: number) => {
+    const it = current();
+    if (!it) return null;
+    it.project.baseMapScale = s;
+    updateContentRect(it);
+    renderAll();
+    return contourPlot.contentRect;
+  },
+  /** 生成一张测试底图（带网格与十字），用于无外部文件时验证溢出/平移 */
+  attachTestBasemap: (w = 1000, h = 1400) => {
+    const it = current();
+    if (!it) return null;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const c = cv.getContext('2d')!;
+    c.fillStyle = '#fff'; c.fillRect(0, 0, w, h);
+    c.strokeStyle = '#b9c6d4'; c.lineWidth = 2;
+    for (let x = 0; x <= w; x += 100) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, h); c.stroke(); }
+    for (let y = 0; y <= h; y += 100) { c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); }
+    c.strokeStyle = '#c0392b'; c.lineWidth = 4;
+    c.strokeRect(4, 4, w - 8, h - 8);
+    it.project.backgroundImageData = cv.toDataURL('image/jpeg', 0.8);
+    it.project.backgroundDxfText = null;
+    bmCacheKey = '';
+    refreshBasemapCache(it.project);
+    renderAll();
+    return true;
+  },
+};
+
+document.getElementById('points-file')!.addEventListener('change', async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    await importPointRows(file);
+  } catch (err) {
+    alert('测点表导入失败：' + (err as Error).message);
+  }
+  input.value = '';
+});
+
 document.getElementById('btn-export')!.addEventListener('click', () => runCmd('export'));
 document.getElementById('btn-basemap')!.addEventListener('click', () => runCmd('basemap'));
 document.getElementById('btn-calibrate')!.addEventListener('click', () => runCmd('calibrate'));
@@ -1856,6 +2242,13 @@ function renderWorkspace(): void {
   entryPlot.rows = project.rows;
   contourPlot.cols = project.cols;
   contourPlot.rows = project.rows;
+  // 纸张按真实宽高比 => 底图与点位跨设备/跨窗口尺寸都不漂移
+  {
+    const ws0 = worldSize(project);
+    const asp = ws0.w / ws0.h;
+    entryPlot.worldAspect = asp;
+    contourPlot.worldAspect = asp;
+  }
 
   alphaSlider.value = String(Math.round(project.overlayAlpha * 100));
   alphaLabel.textContent = `${Math.round(project.overlayAlpha * 100)}%`;
@@ -1869,6 +2262,8 @@ function renderWorkspace(): void {
   }
 
   refreshBasemapCache(project);
+  applyAnchors(item);
+  updateContentRect(item);
   hintBasemap(project);
   fillSettings(project);
   renderBandChoices();
