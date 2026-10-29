@@ -1,64 +1,50 @@
 /**
- * 噪声源识别 —— 自 Kotlin NoiseSourceAnalyzer 1:1 移植：
- * 严格 8 邻域局部极大值 + 达到阈值 + 高于底噪，按声压级降序。
+ * 噪声源识别（任意位置测点版）：
+ * 取每个测点最近的 k 个邻居，若该点声压级严格高于所有邻居且达到阈值，
+ * 判为疑似噪声源。相比旧版 8 邻域，这个规则不依赖规则网格，
+ * 测点疏密不均时同样稳定（k 随点数自适应，最多 6 个）。
  */
-import type { Measurement, Project } from './types';
+import type { Measurement } from './types';
 
 export interface NoiseSource {
-  col: number;
-  row: number;
+  id: string;
   x: number;
   y: number;
   spl: number;
 }
 
 export function detectNoiseSources(
-  project: Project,
   measurements: Measurement[],
   thresholdDb: number,
   backgroundNoiseDb = 0.0,
+  k = 6,
 ): NoiseSource[] {
   if (measurements.length === 0) return [];
-
-  const grid: number[][] = Array.from({ length: project.rows + 1 }, () =>
-    new Array<number>(project.cols + 1).fill(NaN),
-  );
-  for (const m of measurements) {
-    if (m.col >= 0 && m.col <= project.cols && m.row >= 0 && m.row <= project.rows) {
-      grid[m.row][m.col] = m.spl;
-    }
-  }
-
+  const n = measurements.length;
+  const kk = Math.max(1, Math.min(k, n - 1));
   const sources: NoiseSource[] = [];
-  for (const m of measurements) {
-    const v = m.spl;
-    if (v < thresholdDb) continue;
-    if (v - backgroundNoiseDb <= 0.0) continue;
 
-    let isMax = true;
-    outer: for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue;
-        const r = m.row + dr;
-        const c = m.col + dc;
-        if (r >= 0 && r <= project.rows && c >= 0 && c <= project.cols) {
-          const nv = grid[r][c];
-          if (!Number.isNaN(nv) && nv > v) {
-            isMax = false;
-            break outer;
-          }
-        }
+  for (let i = 0; i < n; i++) {
+    const m = measurements[i];
+    if (m.spl < thresholdDb) continue;
+    if (m.spl - backgroundNoiseDb <= 0) continue;
+
+    if (n > 1) {
+      const dist: Array<{ d: number; j: number }> = [];
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        dist.push({ d: Math.hypot(m.x - measurements[j].x, m.y - measurements[j].y), j });
       }
+      dist.sort((a, b) => a.d - b.d);
+      let isMax = true;
+      for (let t = 0; t < Math.min(kk, dist.length); t++) {
+        if (measurements[dist[t].j].spl > m.spl) { isMax = false; break; }
+      }
+      if (!isMax) continue;
     }
-    if (isMax) {
-      sources.push({
-        col: m.col,
-        row: m.row,
-        x: m.col * project.spacingX,
-        y: m.row * project.spacingY,
-        spl: v,
-      });
-    }
+
+    sources.push({ id: m.id, x: m.x, y: m.y, spl: m.spl });
   }
+
   return sources.sort((a, b) => b.spl - a.spl);
 }

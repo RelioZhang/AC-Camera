@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>NoiseAtlas · 手机视图预览</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 20% 0%, #eef3f8 0%, #e6ebf1 45%, #dde3ea 100%);
+      color: #2b333d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 14px 12px 20px;
+      gap: 10px;
+      overflow-x: hidden;
+    }
+
+    header { text-align: center; }
+    header h1 { margin: 0 0 3px; font-size: 15px; letter-spacing: .3px; }
+    header p { margin: 0; font-size: 11.5px; color: #6f7885; }
+
+    .toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    .toolbar button {
+      font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px;
+      border: 1px solid #c9d2db; background: #fff; color: #33404d; cursor: pointer;
+    }
+    .toolbar button.active { background: #1a6fb5; border-color: #14568c; color: #fff; font-weight: 600; }
+    .toolbar button:hover { border-color: #1a6fb5; }
+    .toolbar .sep { width: 1px; height: 18px; background: #c9d2db; margin: 0 4px; }
+
+    /* 缩放容器：整体等比缩放，保证整机可见 */
+    .stage { display: flex; justify-content: center; align-items: flex-start; width: 100%; }
+    .scaler { transform-origin: top center; transition: transform .18s ease; }
+
+    .phone {
+      position: relative;
+      background: #1b1f24;
+      border-radius: 46px;
+      padding: 12px;
+      box-shadow: 0 2px 4px rgba(16,22,30,.28), 0 18px 50px rgba(16,22,30,.32), inset 0 0 0 2px #33393f;
+    }
+    .phone::after {
+      content: ''; position: absolute; right: -3px; top: 150px;
+      width: 3px; height: 64px; background: #2a2f35; border-radius: 2px;
+    }
+    .screen {
+      position: relative; background: #fff; border-radius: 36px; overflow: hidden;
+      width: 390px; height: 844px;
+    }
+    .notch {
+      position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+      width: 116px; height: 26px; background: #14181c; border-radius: 14px;
+      z-index: 5; pointer-events: none;
+    }
+    .screen iframe { border: 0; width: 100%; height: 100%; display: block; }
+    .hint { font-size: 11.5px; color: #6f7885; text-align: center; max-width: 560px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NoiseAtlas · 手机视图预览</h1>
+    <p>iframe 以真实手机宽度加载，媒体查询（≤980px）自动切到手机版界面</p>
+  </header>
+
+  <div class="toolbar" id="sizes">
+    <button data-w="375" data-h="667">iPhone SE</button>
+    <button data-w="390" data-h="844" class="active">iPhone 14</button>
+    <button data-w="393" data-h="851">Android</button>
+    <button data-w="360" data-h="780">小屏 360</button>
+    <span class="sep"></span>
+    <button id="fit" class="active">自适应</button>
+    <button data-zoom="1">100%</button>
+  </div>
+
+  <div class="stage">
+    <div class="scaler" id="scaler">
+      <div class="phone">
+        <div class="screen" id="screen">
+          <div class="notch"></div>
+          <iframe id="frame" src="/" title="NoiseAtlas"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint">
+    可在手机画面里直接点按操作（新建项目 / 载入示例）；双指缩放请在真机体验。<br />
+    数据存于浏览器本地，与桌面版预览共用同一份。
+  </div>
+
+  <script>
+    const scaler = document.getElementById('scaler');
+    const screenEl = document.getElementById('screen');
+    const frame = document.getElementById('frame');
+    let fitMode = true;
+    let manualScale = 1;
+
+    function applyScale() {
+      const phoneH = screenEl.offsetHeight + 24;   // 含外壳 padding
+      const phoneW = screenEl.offsetWidth + 24;
+      const availH = window.innerHeight - 150;     // 减去标题/工具条/提示
+      const availW = window.innerWidth - 32;
+      const fit = Math.min(1, availH / phoneH, availW / phoneW);
+      const s = fitMode ? fit : manualScale;
+      scaler.style.transform = `scale(${s.toFixed(3)})`;
+      // 缩放后元素仍按原尺寸占位，收缩外层高度避免大片空白
+      scaler.style.marginBottom = `${(phoneH * s - phoneH)}px`;
+      document.getElementById('fit').classList.toggle('active', fitMode);
+    }
+
+    document.querySelectorAll('#sizes button[data-w]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#sizes button[data-w]').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        screenEl.style.width = btn.dataset.w + 'px';
+        screenEl.style.height = btn.dataset.h + 'px';
+        frame.src = frame.src;
+        setTimeout(applyScale, 60);
+      });
+    });
+
+    document.getElementById('fit').addEventListener('click', () => {
+      fitMode = true;
+      document.querySelectorAll('#sizes button[data-zoom]').forEach((b) => b.classList.remove('active'));
+      applyScale();
+    });
+
+    document.querySelectorAll('#sizes button[data-zoom]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        fitMode = false;
+        manualScale = parseFloat(btn.dataset.zoom);
+        document.querySelectorAll('#sizes button').forEach((b) => {
+          if (!b.dataset.w) b.classList.remove('active');
+        });
+        btn.classList.add('active');
+        applyScale();
+      });
+    });
+
+    window.addEventListener('resize', applyScale);
+    window.addEventListener('load', applyScale);
+    applyScale();
+  </script>
+</body>
+</html>

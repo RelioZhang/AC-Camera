@@ -59,7 +59,7 @@
   <div class="menu-panel" id="menu-view" hidden>
     <button data-cmd="tab-entry">数据录入</button>
     <button data-cmd="tab-contour">等声压级图</button>
-    <button data-cmd="tab-settings">网格设置</button>
+    <button data-cmd="tab-settings">图纸设置</button>
     <div class="menu-sep"></div>
     <button data-cmd="zoom-fit">缩放到全图</button>
     <div class="menu-sep"></div>
@@ -69,7 +69,7 @@
     <div class="menu-sep"></div>
     <button data-cmd="toggle-calib">显示 / 隐藏定标线段</button>
     <button data-cmd="toggle-points">显示 / 隐藏测点</button>
-    <button data-cmd="toggle-dims">显示 / 隐藏网格尺寸</button>
+    <button data-cmd="toggle-dims">显示 / 隐藏参考网格</button>
     <button data-cmd="toggle-scalebar">显示 / 隐藏比例尺</button>
   </div>
 
@@ -88,11 +88,11 @@
   <!-- ── 工具条 ── -->
   <header id="toolbar" class="mode-both">
     <div class="tb-group" data-cap="项目">
-      <button id="btn-new-project" class="tb" title="新建项目：输入名称、网格列数/行数与间距">
+      <button id="btn-new-project" class="tb" title="新建项目：名称、图纸宽高、底噪">
         <svg class="ic" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>
         <span class="tb-label">新建项目</span>
       </button>
-      <button id="btn-demo" class="tb" title="载入示例项目：8×6 网格、3 处模拟声源的演示数据">
+      <button id="btn-demo" class="tb" title="载入示例项目：不规则布点的演示数据（3 处模拟声源）">
         <svg class="ic" viewBox="0 0 16 16"><path d="M8 2l1.6 4.4L14 8l-4.4 1.6L8 14l-1.6-4.4L2 8l4.4-1.6z"/></svg>
         <span class="tb-label">示例项目</span>
       </button>
@@ -110,17 +110,17 @@
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group viewtabs" data-cap="视图">
-      <button data-tab="entry" class="tb viewtab active" title="数据录入：在网格交汇点录入声级计实测值">
+      <button data-tab="entry" class="tb viewtab active" title="测点录入：在底图任意位置点选，录入该点声级计实测值">
         <svg class="ic" viewBox="0 0 16 16"><path d="M3 3h10v10H3zM3 8h10M8 3v10"/></svg>
         <span class="tb-label">数据录入</span>
       </button>
-      <button data-tab="contour" class="tb viewtab" title="等声压级图：声场热力图 + 等值线 + 噪声源标记">
+      <button data-tab="contour" class="tb viewtab" title="等声压级图：声场彩图 + 等值曲线 + 噪声源标记">
         <svg class="ic" viewBox="0 0 16 16"><path d="M2 11c2-4 5-6 8-6s4 1 4 1M2 13c3-3 7-4 12-3"/></svg>
         <span class="tb-label">等声压级图</span>
       </button>
-      <button data-tab="settings" class="tb viewtab" title="网格设置：项目名称、行列数、间距、底噪、参照宽度">
+      <button data-tab="settings" class="tb viewtab" title="图纸设置：项目名称、行列数、间距、底噪、参照宽度">
         <svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M12.2 3.8l-1.4 1.4M5.2 10.8l-1.4 1.4"/></svg>
-        <span class="tb-label">网格设置</span>
+        <span class="tb-label">图纸设置</span>
       </button>
     </div>
     <div class="tb-sep"></div>
@@ -212,8 +212,8 @@
                 <div class="chk-list">
                   <label><input type="checkbox" id="chk-points" checked /> 测点</label>
                   <label><input type="checkbox" id="chk-contours" checked /> 等值线</label>
-                  <label><input type="checkbox" id="chk-gridlines" checked /> 网格线</label>
-                  <label><input type="checkbox" id="chk-dims" checked /> 网格尺寸</label>
+                  <label><input type="checkbox" id="chk-gridlines" checked /> 参考网格</label>
+                  <label><input type="checkbox" id="chk-dims" checked /> 参考网格</label>
                   <label><input type="checkbox" id="chk-scalebar" checked /> 比例尺</label>
                   <label><input type="checkbox" id="chk-calib" checked /> 定标线段</label>
                 </div>
@@ -280,13 +280,8 @@
           <form id="settings-form" class="form-grid">
             <label>项目名称 <input name="name" required /></label>
             <label>备注（厂名 / 区域） <input name="description" /></label>
-            <label>列数（网格单元） <input name="cols" type="number" min="2" max="80" required /></label>
-            <label>行数（网格单元） <input name="rows" type="number" min="2" max="80" required /></label>
-            <label>列间距 (m) <input name="spacingX" type="number" step="0.1" min="0.1" required /></label>
-            <label>行间距 (m) <input name="spacingY" type="number" step="0.1" min="0.1" required /></label>
-            <label>底图参照宽度 (m)
-              <input name="planReferenceMeters" type="number" step="0.1" min="0" />
-            </label>
+            <label>图纸宽度 (m) <input name="worldW" type="number" step="0.1" min="1" required /></label>
+            <label>图纸高度 (m) <input name="worldH" type="number" step="0.1" min="1" required /></label>
             <label>背景噪声 / 底噪 (dBA)
               <input name="backgroundNoiseDb" type="number" step="0.1" min="0" />
             </label>
@@ -338,7 +333,7 @@
     <span class="sb-sep"></span>
     <span id="st-grid">网格 —</span>
     <span class="spacer"></span>
-    <span id="st-hint">滚轮缩放 · 拖动平移 · 单击交汇点录入</span>
+    <span id="st-hint">滚轮缩放 · 拖动平移 · 单击任意位置录入测点</span>
   </footer>
 </div>
 

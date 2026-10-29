@@ -1,8 +1,13 @@
 /**
- * 声场与色彩算法 —— 从 Kotlin shared 模块 1:1 移植，行为保持一致：
- *  - 能量叠加 + 距离衰减模型（低能量区稳定落在底噪，不伪辐射）
- *  - 蓝→青→绿→黄→红 colormap
- *  - 色带量化（带中心色 + 调色板步数下限 64，保证 64/128/256 可见差异）
+ * 声场与色彩算法 —— 支持**任意位置测点**（不再依赖规则网格）。
+ *
+ * 模型沿用旧版「能量叠加 + 距离衰减」：
+ *   E(p) = 10·log10( Σ 10^((v_i − α·d(p,i)) / 10) )
+ * α（dB/m）由测点的典型间距自动推导（默认等效 6 dB/倍距），
+ * 点距不规则时也能得到合理衰减，而不是死板的“每格 6 dB”。
+ *
+ * 计算域 = 测点包围盒外扩 margin（不超出图纸范围），
+ * 等声压级图只覆盖实际普查区域，不会把空白地带涂满颜色。
  */
 
 export interface PointValue {
@@ -11,110 +16,126 @@ export interface PointValue {
   value: number;
 }
 
+export interface Domain {
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+}
+
 export interface FieldResult {
   values: Float64Array;
   resX: number;
   resY: number;
-  worldW: number;
-  worldH: number;
+  /** 场的物理范围（米，相对图纸左上角） */
+  domain: Domain;
   min: number;
   max: number;
 }
 
-const RES_X = 140;
-
-export function computeResY(worldW: number, worldH: number, resX = RES_X): number {
-  if (worldH <= 0) return resX;
-  return Math.max(2, Math.round(resX * worldH / worldW));
+export interface SplPoint {
+  x: number;
+  y: number;
+  spl: number;
 }
 
-/**
- * E(p) = 10·log10( Σ 10^((v_i − α·d) / 10) )，α = attenuationPerMeter（默认 6dB/网格间距）。
- * points 的 value 应为「实测值 − 底噪」（≥0）；调用方再把底噪加回去。
- */
-export function energyField(
-  points: PointValue[],
-  worldW: number,
-  worldH: number,
-  attenuationPerMeter = 0.6,
-  resX = RES_X,
-): FieldResult {
-  const resY = computeResY(worldW, worldH, resX);
-  const values = new Float64Array(resX * resY);
-  const result: FieldResult = { values, resX, resY, worldW, worldH, min: 0, max: 0 };
-  if (points.length === 0 || worldW <= 0 || worldH <= 0) return result;
+const RES_X = 160;
+const DEFAULT_SPACING = 10;
 
-  const amp = points.map((p) => Math.pow(10, p.value / 10));
-  const k = attenuationPerMeter * 2.302585092994046 / 10; // α·ln(10)/10
-  let min = Infinity;
-  let max = -Infinity;
-
-  for (let gy = 0; gy < resY; gy++) {
-    const y = (gy + 0.5) / resY * worldH;
-    for (let gx = 0; gx < resX; gx++) {
-      const x = (gx + 0.5) / resX * worldW;
-      let energy = 0;
-      for (let i = 0; i < points.length; i++) {
-        const dx = x - points[i].x;
-        const dy = y - points[i].y;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        energy += amp[i] * Math.exp(-k * d);
-      }
-      const e = energy > 0 ? 10 * Math.log10(energy) : 0;
-      values[gy * resX + gx] = e;
-      if (e < min) min = e;
-      if (e > max) max = e;
+/** 测点典型间距：最近邻距离的中位数，用于把「6 dB/倍距」换算成 dB/m。 */
+export function typicalSpacing(points: SplPoint[], fallback = DEFAULT_SPACING): number {
+  if (points.length < 2) return fallback;
+  const d: number[] = [];
+  for (let i = 0; i < points.length; i++) {
+    let best = Infinity;
+    for (let j = 0; j < points.length; j++) {
+      if (i === j) continue;
+      const dd = Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y);
+      if (dd < best) best = dd;
     }
+    if (Number.isFinite(best) && best > 1e-6) d.push(best);
   }
-  result.min = min;
-  result.max = max;
-  return result;
+  if (d.length === 0) return fallback;
+  d.sort((a, b) => a - b);
+  return d[Math.floor(d.length / 2)] || fallback;
 }
 
-/**
- * 由测点 + 项目参数算出「带底噪的声压级场」。
- *
- * 下限（色标最低值）取法：
- *  - 用户填了底噪 bg > 0 → 全场下限 = bg（物理上不可能低于本底噪声）；
- *  - 未填底噪（bg = 0） → 不再硬钳到 0 dB，而是按测点声能自然衰减的包络取
- *    「最安静测点 − DECAY_SPAN dB」，这样色标刻度反映的是真实的衰减范围，
- *    而不是一个没有物理意义的 0 dB。
- */
+/** 由测点包围盒外扩得到计算域，夹在图纸范围内。 */
+export function fieldDomain(
+  points: SplPoint[],
+  world: { w: number; h: number },
+  marginRatio = 0.12,
+): Domain | null {
+  if (points.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  // 单点 / 一列 / 一行测点时保证域有厚度，否则等值线无法成形
+  const spanX = Math.max(maxX - minX, world.w * 0.08);
+  const spanY = Math.max(maxY - minY, world.h * 0.08);
+  const padX = Math.max(spanX * marginRatio, world.w * 0.04);
+  const padY = Math.max(spanY * marginRatio, world.h * 0.04);
+  const x0 = Math.max(0, minX - padX);
+  const y0 = Math.max(0, minY - padY);
+  const x1 = Math.min(world.w, maxX + padX);
+  const y1 = Math.min(world.h, maxY + padY);
+  return { x0, y0, w: Math.max(1e-3, x1 - x0), h: Math.max(1e-3, y1 - y0) };
+}
+
+function computeResY(domain: Domain, resX: number): number {
+  if (domain.h <= 0) return resX;
+  return Math.max(2, Math.round((resX * domain.h) / domain.w));
+}
+
+/** 无底噪时的下限：最安静测点以下的自然衰减包络 */
 export const DECAY_SPAN = 18;
 
-export function computeSplField(
-  project: { cols: number; rows: number; spacingX: number; spacingY: number; backgroundNoiseDb: number },
-  splByPoint: Map<string, number>,
+export function computeSplFieldPoints(
+  points: SplPoint[],
+  domain: Domain,
+  backgroundNoiseDb = 0,
+  attenuationPerMeter?: number,
+  resX = RES_X,
 ): FieldResult | null {
-  if (splByPoint.size === 0) return null;
-  const bg = project.backgroundNoiseDb;
-  const worldW = project.cols * project.spacingX;
-  const worldH = project.rows * project.spacingY;
-  const spacing = (project.spacingX + project.spacingY) / 2;
-  const atten = spacing > 0 ? 6.0 / spacing : 0.6;
-  const pts: PointValue[] = [];
-  let minMeasured = Infinity;
-  for (const [key, spl] of splByPoint) {
-    const [c, r] = key.split(',').map(Number);
-    if (spl < minMeasured) minMeasured = spl;
-    pts.push({ x: c * project.spacingX, y: r * project.spacingY, value: Math.max(0, spl - bg) });
-  }
-  const excess = energyField(pts, worldW, worldH, atten);
+  if (points.length === 0) return null;
+  const bg = backgroundNoiseDb;
+  const resY = computeResY(domain, resX);
+  const values = new Float64Array(resX * resY);
 
-  // 物理下限：有底噪就落在底噪；没有底噪则跟随自然衰减包络（而不是 0 dB）
+  const spacing = typicalSpacing(points);
+  const atten = attenuationPerMeter && attenuationPerMeter > 0
+    ? attenuationPerMeter
+    : 6.0 / Math.max(1e-3, spacing);
+  const k = (atten * Math.LN10) / 10;
+
+  const amps = points.map((p) => Math.pow(10, Math.max(0, p.spl - bg) / 10));
+  let minMeasured = Infinity;
+  for (const p of points) if (p.spl < minMeasured) minMeasured = p.spl;
   const floor = bg > 0 ? bg : Math.max(0, minMeasured - DECAY_SPAN);
 
   let smin = Infinity;
   let smax = -Infinity;
-  for (let i = 0; i < excess.values.length; i++) {
-    const v = Math.max(excess.values[i] + bg, floor);
-    excess.values[i] = v;
-    if (v < smin) smin = v;
-    if (v > smax) smax = v;
+  for (let gy = 0; gy < resY; gy++) {
+    const y = domain.y0 + ((gy + 0.5) / resY) * domain.h;
+    for (let gx = 0; gx < resX; gx++) {
+      const x = domain.x0 + ((gx + 0.5) / resX) * domain.w;
+      let energy = 0;
+      for (let i = 0; i < points.length; i++) {
+        const d = Math.hypot(x - points[i].x, y - points[i].y);
+        energy += amps[i] * Math.exp(-k * d);
+      }
+      const v0 = energy > 0 ? 10 * Math.log10(energy) + bg : floor;
+      const v = Math.max(v0, floor);
+      values[gy * resX + gx] = v;
+      if (v < smin) smin = v;
+      if (v > smax) smax = v;
+    }
   }
-  excess.min = smin;
-  excess.max = smax;
-  return excess;
+  return { values, resX, resY, domain, min: smin, max: smax };
 }
 
 // ───────────────────────── colormap ─────────────────────────
@@ -168,12 +189,7 @@ export function quantizeStep(bands: number): number {
   return Math.min(MAX_PALETTE_STEPS, Math.max(MIN_PALETTE_STEPS, bands));
 }
 
-/** 渲染色场为 ImageData（供 putImageData），含色带量化；minValue/maxValue 为场极值。 */
-export function renderFieldImageData(
-  field: FieldResult,
-  colorBands: number,
-  alpha: number,
-): ImageData {
+export function renderFieldImageData(field: FieldResult, colorBands: number, alpha: number): ImageData {
   const { values, resX, resY, min, max } = field;
   const img = new ImageData(resX, resY);
   const range = max - min > 1e-6 ? max - min : 1.0;

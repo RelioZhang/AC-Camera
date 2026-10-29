@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>NoiseAtlas · 桌面客户端演示</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      color: #e7edf3;
+      background:
+        radial-gradient(1200px 700px at 25% 15%, #1d3550 0%, #16283c 38%, #0e1926 72%, #0a121c 100%);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── 顶部控制条 ── */
+    .bar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 10px 16px;
+      background: rgba(10, 18, 28, .55);
+      border-bottom: 1px solid rgba(255, 255, 255, .08);
+      backdrop-filter: blur(6px);
+      flex: none;
+      z-index: 20;
+    }
+    .bar .title { font-weight: 600; font-size: 13px; margin-right: 6px; letter-spacing: .3px; }
+    .bar .sub { color: #8fa3b6; font-size: 11.5px; margin-right: 8px; }
+    .bar button {
+      font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06);
+      color: #dbe6f0; cursor: pointer; white-space: nowrap;
+    }
+    .bar button:hover { border-color: #4b9fd8; background: rgba(75,159,216,.16); }
+    .bar button.active { background: #1a6fb5; border-color: #1a6fb5; color: #fff; font-weight: 600; }
+    .bar .sep { width: 1px; height: 18px; background: rgba(255,255,255,.14); margin: 0 4px; }
+
+    /* ── 桌面区域 ── */
+    .desk {
+      flex: 1;
+      position: relative;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      padding: 10px;
+    }
+    .frame-box { position: relative; }          /* 按缩放后尺寸占位，保证居中 */
+    .scaler { position: absolute; top: 0; left: 0; transform-origin: top left; transition: transform .18s ease; }
+
+    /* ── Windows 风格窗口 ── */
+    .win {
+      position: relative;
+      background: #f2f4f7;
+      border-radius: 9px;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,.14),
+        0 30px 80px rgba(0,0,0,.55),
+        0 10px 28px rgba(0,0,0,.42);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .win-titlebar {
+      height: 34px; flex: none;
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 0 0 10px;
+      background: linear-gradient(#f6f8fa, #e9edf2);
+      border-bottom: 1px solid #d5dbe2;
+      user-select: none;
+    }
+    .win-titlebar img { width: 16px; height: 16px; border-radius: 3px; }
+    .win-titlebar .name { font-size: 12.5px; color: #222a33; font-weight: 600; }
+    .win-titlebar .name small { font-weight: 400; color: #78838f; margin-left: 6px; }
+    .win-ctrls { margin-left: auto; display: flex; height: 100%; }
+    .win-ctrls span {
+      width: 44px; display: grid; place-items: center;
+      font-size: 11px; color: #566270; cursor: default;
+    }
+    .win-ctrls span:hover { background: rgba(0,0,0,.06); }
+    .win-ctrls span.close:hover { background: #e81123; color: #fff; }
+
+    .win-body { flex: 1; min-height: 0; background: #fff; }
+    .win-body iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+    /* ── 任务栏 ── */
+    .taskbar {
+      flex: none; height: 46px;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      background: rgba(16, 24, 34, .82);
+      border-top: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(10px);
+      z-index: 20;
+    }
+    .taskbar .tb-ico {
+      width: 30px; height: 30px; border-radius: 7px;
+      display: grid; place-items: center;
+      background: rgba(255,255,255,.07);
+      font-size: 14px; color: #cfdae6;
+    }
+    .taskbar .tb-ico.app { background: #1a6fb5; box-shadow: 0 0 0 1px rgba(255,255,255,.2); }
+    .taskbar .tb-ico.app img { width: 22px; height: 22px; border-radius: 4px; }
+
+    .tip {
+      position: absolute; right: 14px; bottom: 12px;
+      font-size: 11px; color: rgba(210, 224, 236, .55);
+      text-align: right; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <span class="title">NoiseAtlas 桌面客户端</span>
+    <span class="sub">Windows 客户端界面演示</span>
+    <button data-w="1280" data-h="800">1280×800</button>
+    <button data-w="1440" data-h="900" class="active">1440×900</button>
+    <button data-w="1680" data-h="1050">1680×1050</button>
+    <button data-w="1920" data-h="1080">1920×1080</button>
+    <span class="sep"></span>
+    <button id="btn-fit" class="active">自适应缩放</button>
+    <span class="sep"></span>
+    <button id="btn-demo">载入示例数据</button>
+    <button id="btn-view-entry">测点录入</button>
+    <button id="btn-view-contour">等声压级图</button>
+    <button id="btn-view-settings">图纸设置</button>
+  </div>
+
+  <div class="desk">
+    <div class="frame-box" id="frameBox">
+    <div class="scaler" id="scaler">
+      <div class="win" id="win" style="width:1440px;height:900px">
+        <div class="win-titlebar">
+          <img src="/icon-32.png" alt="" />
+          <span class="name">NoiseAtlas<small>噪声图谱 · 厂区噪声普查与预测</small></span>
+          <div class="win-ctrls"><span>—</span><span>▢</span><span class="close">✕</span></div>
+        </div>
+        <div class="win-body">
+          <iframe id="frame" src="/" title="NoiseAtlas"></iframe>
+        </div>
+      </div>
+    </div>
+    </div>
+    <div class="tip">演示外壳：仅模拟窗口外观，内部为真实应用界面</div>
+  </div>
+
+  <div class="taskbar">
+    <div class="tb-ico">⊞</div>
+    <div class="tb-ico app"><img src="/icon-32.png" alt="" /></div>
+    <div class="tb-ico">⌕</div>
+    <div class="tb-ico">▤</div>
+  </div>
+
+  <script>
+    const scaler = document.getElementById('scaler');
+    const win = document.getElementById('win');
+    const frame = document.getElementById('frame');
+    let fitMode = true;
+
+    const frameBox = document.getElementById('frameBox');
+
+    function applyScale() {
+      const w = win.offsetWidth, h = win.offsetHeight;
+      const availW = window.innerWidth - 56;
+      const availH = window.innerHeight - 46 - 52 - 40; // 顶栏 + 任务栏 + 边距
+      const s = fitMode ? Math.min(1, availW / w, availH / h) : 1;
+      scaler.style.transform = `scale(${s.toFixed(4)})`;
+      frameBox.style.width = `${Math.round(w * s)}px`;
+      frameBox.style.height = `${Math.round(h * s)}px`;
+    }
+
+    document.querySelectorAll('.bar button[data-w]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.bar button[data-w]').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        win.style.width = btn.dataset.w + 'px';
+        win.style.height = btn.dataset.h + 'px';
+        applyScale();
+      });
+    });
+
+    document.getElementById('btn-fit').addEventListener('click', (e) => {
+      fitMode = !fitMode;
+      e.currentTarget.classList.toggle('active', fitMode);
+      e.currentTarget.textContent = fitMode ? '自适应缩放' : '原始尺寸';
+      applyScale();
+    });
+
+    // 与 iframe 同源，可直接驱动内部按钮，方便演示
+    function clickInApp(selector) {
+      const doc = frame.contentDocument;
+      const el = doc && doc.querySelector(selector);
+      if (el) el.click();
+      return !!el;
+    }
+
+    function ensureDemoData() {
+      const doc = frame.contentDocument;
+      if (!doc) return;
+      const empty = doc.getElementById('empty-state');
+      const hasProject = empty && empty.hidden;
+      if (!hasProject) clickInApp('#btn-demo');
+    }
+
+    document.getElementById('btn-demo').addEventListener('click', () => clickInApp('#btn-demo'));
+    document.getElementById('btn-view-entry').addEventListener('click', () => clickInApp('.viewtab[data-tab="entry"]'));
+    document.getElementById('btn-view-contour').addEventListener('click', () => clickInApp('.viewtab[data-tab="contour"]'));
+    document.getElementById('btn-view-settings').addEventListener('click', () => clickInApp('.viewtab[data-tab="settings"]'));
+
+    frame.addEventListener('load', () => {
+      setTimeout(() => { ensureDemoData(); applyScale(); }, 300);
+    });
+
+    window.addEventListener('resize', applyScale);
+    applyScale();
+  </script>
+</body>
+</html>
