@@ -5,7 +5,7 @@ import { newProject, newPointId, worldSize } from './core/types';
 import type { Project, ProjectWithMeasurements, Measurement } from './core/types';
 import { anchorToMeters, baseMapRectMeters } from './core/basemap';
 import { bandColors, colormap, computeSplFieldPoints, fieldDomain, quantizeStep, renderFieldImageData } from './core/field';
-import type { SplPoint } from './core/field';
+import type { SplPoint, FieldScope, Domain } from './core/field';
 import type { FieldResult } from './core/field';
 import { contours, defaultLevels } from './core/contour';
 import { readDxf } from './core/dxf';
@@ -30,6 +30,8 @@ interface UiPrefs {
   showDims: boolean;
   /** 底部距离比例尺 */
   showScaleBar: boolean;
+  /** 等压级成图范围：整幅图纸 / 仅测点区域 */
+  fieldScope: FieldScope;
   toolbarMode: ToolbarMode;
 }
 
@@ -38,7 +40,7 @@ const PREFS_KEY = 'noiseatlas-ui-prefs-v1';
 const prefs: UiPrefs = (() => {
   const def: UiPrefs = {
     showCalib: true, showPoints: true, showContours: true, showGridlines: true,
-    showDims: true, showScaleBar: true, toolbarMode: 'both',
+    showDims: true, showScaleBar: true, fieldScope: 'paper', toolbarMode: 'both',
   };
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -999,12 +1001,25 @@ function getCachedField(item: ProjectWithMeasurements): FieldResult | null {
   const pts = splPoints(item);
   if (pts.length === 0) return null;
   const ws = worldSize(item.project);
-  const domain = fieldDomain(pts, ws);
+
+  // 底图可能超出纸张（定标放大后）：成图范围要把它一起包进来，
+  // 否则等压级图只覆盖纸面，底图边缘没有颜色。
+  const aspect = basemapAspect();
+  const bmRect = aspect > 0 ? baseMapRectMeters(item.project, aspect) : null;
+  const cover: Domain | null = bmRect
+    ? { x0: bmRect.left, y0: bmRect.top, w: bmRect.width, h: bmRect.height }
+    : null;
+
+  const domain = fieldDomain(pts, ws, { scope: prefs.fieldScope, cover });
   if (!domain) return null;
   const key = pts.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)},${p.spl}`).sort().join(';')
-    + `|${ws.w}|${ws.h}|${item.project.backgroundNoiseDb}`;
+    + `|${ws.w}|${ws.h}|${item.project.backgroundNoiseDb}|${prefs.fieldScope}`
+    + `|${cover ? `${cover.x0.toFixed(2)},${cover.y0.toFixed(2)},${cover.w.toFixed(2)},${cover.h.toFixed(2)}` : '-'}`;
   if (splFieldCache?.key === key) return splFieldCache.field;
-  const field = computeSplFieldPoints(pts, domain, item.project.backgroundNoiseDb);
+
+  // 范围越大，网格越要细一点，否则大图纸上色块明显
+  const resX = Math.min(360, Math.max(160, Math.round(domain.w / 0.45)));
+  const field = computeSplFieldPoints(pts, domain, item.project.backgroundNoiseDb, undefined, resX);
   if (!field) return null;
   splFieldCache = { key, field };
   return field;
@@ -1122,6 +1137,33 @@ bindToggle('chk-contours', 'showContours');
 bindToggle('chk-gridlines', 'showGridlines');
 bindToggle('chk-dims', 'showDims');
 bindToggle('chk-scalebar', 'showScaleBar');
+
+// ── 计算范围：整幅图纸 / 仅测点区域 ──
+
+function applyScopeButtons(): void {
+  document.querySelectorAll<HTMLButtonElement>('#scope-choices [data-scope]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.scope === prefs.fieldScope);
+  });
+}
+
+function setFieldScope(scope: FieldScope): void {
+  if (prefs.fieldScope === scope) return;
+  prefs.fieldScope = scope;
+  savePrefs();
+  applyScopeButtons();
+  splFieldCache = null;           // 范围变了，声场必须重算
+  const item = current();
+  if (item) {
+    renderLegend(item);
+    renderStats(item);
+  }
+  contourPlot.paint();
+}
+
+document.querySelectorAll<HTMLButtonElement>('#scope-choices [data-scope]').forEach((b) => {
+  b.addEventListener('click', () => setFieldScope((b.dataset.scope as FieldScope) ?? 'paper'));
+});
+applyScopeButtons();
 
 // ── 色阶 ──
 
@@ -1852,6 +1894,12 @@ function runCmdInner(cmd: string): void {
     case 'recompute':
       splFieldCache = null;
       renderAll();
+      break;
+    case 'scope-paper':
+      setFieldScope('paper');
+      break;
+    case 'scope-points':
+      setFieldScope('points');
       break;
     case 'basemap':
       if (!item) { alert('请先打开项目'); return; }

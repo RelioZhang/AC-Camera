@@ -528,3 +528,25 @@ dialog button { border: 1px solid var(--line-soft); background: #fbfcfd; padding
   background: #fff;
   color: var(--text);
 }
+
+/* ───────────── 分段选择（计算范围等） ───────────── */
+.seg-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 8px 10px 4px;
+}
+.seg-row button {
+  padding: 5px 6px;
+  font-size: 11.5px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #3d4854;
+  border-radius: 3px;
+}
+.seg-row button.active {
+  background: var(--accent-soft);
+  border-color: #a9c6e0;
+  color: #12506f;
+  font-weight: 600;
+}

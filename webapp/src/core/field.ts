@@ -16,6 +16,13 @@ export interface PointValue {
   value: number;
 }
 
+/**
+ * 成图范围：
+ *  - paper  ：整幅图纸（并上底图溢出部分），远处自然衰减到底噪下限
+ *  - points ：仅测点包围盒外扩，图面更集中在普查区
+ */
+export type FieldScope = 'paper' | 'points';
+
 export interface Domain {
   x0: number;
   y0: number;
@@ -60,13 +67,35 @@ export function typicalSpacing(points: SplPoint[], fallback = DEFAULT_SPACING): 
   return d[Math.floor(d.length / 2)] || fallback;
 }
 
-/** 由测点包围盒外扩得到计算域，夹在图纸范围内。 */
+/**
+ * 计算域。
+ * @param opts.scope  'paper'（默认）铺满整幅图纸；'points' 只用测点包围盒
+ * @param opts.cover  底图溢出纸张时的外接矩形，用于保证彩图覆盖整幅底图
+ */
 export function fieldDomain(
   points: SplPoint[],
   world: { w: number; h: number },
-  marginRatio = 0.12,
+  opts: { scope?: FieldScope; marginRatio?: number; cover?: Domain | null } = {},
 ): Domain | null {
   if (points.length === 0) return null;
+  const scope = opts.scope ?? 'paper';
+
+  if (scope === 'paper') {
+    let x0 = 0;
+    let y0 = 0;
+    let x1 = world.w;
+    let y1 = world.h;
+    const cv = opts.cover;
+    if (cv && cv.w > 0 && cv.h > 0) {
+      x0 = Math.min(x0, cv.x0);
+      y0 = Math.min(y0, cv.y0);
+      x1 = Math.max(x1, cv.x0 + cv.w);
+      y1 = Math.max(y1, cv.y0 + cv.h);
+    }
+    return { x0, y0, w: Math.max(1e-3, x1 - x0), h: Math.max(1e-3, y1 - y0) };
+  }
+
+  const marginRatio = opts.marginRatio ?? 0.12;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
     if (p.x < minX) minX = p.x;

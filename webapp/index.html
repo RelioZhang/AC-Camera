@@ -78,6 +78,9 @@
     <button data-cmd="noise">识别噪声源…</button>
     <button data-cmd="recompute">重新计算声场</button>
     <div class="menu-sep"></div>
+    <button data-cmd="scope-paper">成图范围：整幅图纸</button>
+    <button data-cmd="scope-points">成图范围：仅测点区域</button>
+    <div class="menu-sep"></div>
     <button data-cmd="basemap">导入底图…</button>
     <button data-cmd="calibrate">两点定标</button>
   </div>
@@ -215,7 +218,7 @@
                   <label><input type="checkbox" id="chk-points" checked /> 测点</label>
                   <label><input type="checkbox" id="chk-contours" checked /> 等值线</label>
                   <label><input type="checkbox" id="chk-gridlines" checked /> 参考网格</label>
-                  <label><input type="checkbox" id="chk-dims" checked /> 参考网格</label>
+                  <label><input type="checkbox" id="chk-dims" checked /> 图纸尺寸</label>
                   <label><input type="checkbox" id="chk-scalebar" checked /> 比例尺</label>
                   <label><input type="checkbox" id="chk-calib" checked /> 定标线段</label>
                 </div>
@@ -231,6 +234,17 @@
                   <input type="range" id="alpha-slider" min="10" max="100" value="72" />
                   <span id="alpha-label" class="readout">72%</span>
                 </div>
+              </div>
+            </section>
+
+            <section class="dock-sec" data-sec="scope">
+              <button class="dock-head">计算范围<span class="caret2">▾</span></button>
+              <div class="dock-body">
+                <div class="seg-row" id="scope-choices">
+                  <button type="button" data-scope="paper" title="等压级图铺满整幅图纸（含定标后超出的底图范围）">整幅图纸</button>
+                  <button type="button" data-scope="points" title="只在测点分布范围内成图，图面更集中">仅测点区域</button>
+                </div>
+                <div class="hint small">整幅图纸：远处按距离衰减到底噪下限；仅测点区域：彩图只覆盖普查范围。</div>
               </div>
             </section>
 
