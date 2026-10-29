@@ -29,6 +29,14 @@ export class PlotCanvas {
   /** 鼠标在世界坐标中的位置（归一化 0..1），供状态栏显示米制坐标。 */
   onHover: ((u: number, v: number) => void) | null = null;
   rawTapMode = false;
+  /**
+   * 拖点钩子：pointerdown 时调用，返回 true 表示“抓住了一个标记点”，
+   * 此后的移动不再平移画布，而是交给 onPointDragMove 处理坐标更新。
+   */
+  onPointDragStart: ((px: number, py: number) => boolean) | null = null;
+  onPointDragMove: ((px: number, py: number) => void) | null = null;
+  onPointDragEnd: (() => void) | null = null;
+  private draggingPoint = false;
   cols = 10;
   rows = 10;
   onZoomChange: ((z: number) => void) | null = null;
@@ -58,7 +66,9 @@ export class PlotCanvas {
       this.canvas.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
       if (pointers.size === 1) {
-        this.dragStart = { x: e.offsetX, y: e.offsetY, moved: false };
+        // 先问一下是否抓住了测点：抓住就不平移画布
+        this.draggingPoint = this.onPointDragStart ? this.onPointDragStart(e.offsetX, e.offsetY) === true : false;
+        this.dragStart = this.draggingPoint ? null : { x: e.offsetX, y: e.offsetY, moved: false };
         pinch = null;
       } else if (pointers.size === 2) {
         this.dragStart = null; // 多指时不再判定为点击
@@ -85,6 +95,11 @@ export class PlotCanvas {
           }
         }
         pinch = now;
+        return;
+      }
+
+      if (this.draggingPoint) {
+        this.onPointDragMove?.(e.offsetX, e.offsetY);
         return;
       }
 
@@ -115,6 +130,12 @@ export class PlotCanvas {
     this.canvas.addEventListener('pointerup', (e) => {
       pointers.delete(e.pointerId);
       if (pointers.size < 2) pinch = null;
+      if (this.draggingPoint) {
+        this.draggingPoint = false;
+        this.onPointDragEnd?.();
+        this.canvas.style.cursor = 'crosshair';
+        return;
+      }
       const start = this.dragStart;
       this.dragStart = null;
       if (!start || start.moved || pointers.size > 0) return; // 拖动或多指结束不触发点击
@@ -132,6 +153,10 @@ export class PlotCanvas {
     this.canvas.addEventListener('pointercancel', (e) => {
       pointers.delete(e.pointerId);
       if (pointers.size < 2) pinch = null;
+      if (this.draggingPoint) {
+        this.draggingPoint = false;
+        this.onPointDragEnd?.();
+      }
       this.dragStart = null;
     });
   }

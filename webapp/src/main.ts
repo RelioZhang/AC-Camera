@@ -620,6 +620,13 @@ entryPlot.setPainter((world) => {
     ctx.lineWidth = 1.4;
     ctx.stroke();
     // 值标注：点密集时只在放大后显示
+    if (m.id === draggingId) {
+      ctx.beginPath();
+      ctx.arc(px, py, rad + 5, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(26,111,181,0.9)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
     if (item.measurements.length <= 40 || entryPlot.transform.zoom >= 1.8) {
       ctx.fillStyle = '#101418';
       ctx.font = 'bold 10px "Segoe UI", system-ui';
@@ -676,6 +683,65 @@ function pxToMeters(world: Rect, p: Project, u: number, v: number): { x: number;
   const ws = worldSize(p);
   return { x: u * ws.w, y: v * ws.h };
 }
+
+// ───────────────────────── 拖动测点 ─────────────────────────
+
+let draggingId: string | null = null;
+
+/** 命中测试：画布像素位置附近的测点（阈值 14px） */
+function hitPoint(item: ProjectWithMeasurements, plot: PlotCanvas, px: number, py: number): Measurement | null {
+  const world = plot.worldRect();
+  let best: Measurement | null = null;
+  let bestD = Infinity;
+  for (const m of item.measurements) {
+    const q = pointToPx(world, item.project, m);
+    const d = Math.hypot(q.x - px, q.y - py);
+    if (d < bestD) { bestD = d; best = m; }
+  }
+  return bestD <= 14 ? best : null;
+}
+
+/** 把画布像素换算成图纸米制坐标并夹在范围内 */
+function movePointTo(item: ProjectWithMeasurements, plot: PlotCanvas, m: Measurement, px: number, py: number): void {
+  const world = plot.worldRect();
+  const ws = worldSize(item.project);
+  const nx = ((px - world.left) / Math.max(1e-6, world.width)) * ws.w;
+  const ny = ((py - world.top) / Math.max(1e-6, world.height)) * ws.h;
+  m.x = Math.min(ws.w, Math.max(0, nx));
+  m.y = Math.min(ws.h, Math.max(0, ny));
+}
+
+function bindPointDrag(plot: PlotCanvas): void {
+  plot.onPointDragStart = (px, py) => {
+    const item = current();
+    if (!item || item.measurements.length === 0) return false;
+    const hit = hitPoint(item, plot, px, py);
+    if (!hit) return false;
+    draggingId = hit.id;
+    plot.canvas.style.cursor = 'grabbing';
+    return true;
+  };
+  plot.onPointDragMove = (px, py) => {
+    const item = current();
+    if (!item || !draggingId) return;
+    const m = item.measurements.find((x) => x.id === draggingId);
+    if (!m) return;
+    movePointTo(item, plot, m, px, py);
+    plot.paint();
+  };
+  plot.onPointDragEnd = () => {
+    const item = current();
+    if (item && draggingId) {
+      touch(item.project);
+      persist();
+      splFieldCache = null;
+    }
+    draggingId = null;
+    renderAll();
+  };
+}
+
+bindPointDrag(entryPlot);
 
 // ───────────────────────── 通用表单弹窗 ─────────────────────────
 // 安卓 WebView 不支持 window.prompt()（调用直接返回 null，界面毫无反应），
@@ -853,7 +919,7 @@ contourPlot.setPainter((world) => {
     off.width = field.resX;
     off.height = field.resY;
     off.getContext('2d')!.putImageData(
-      renderFieldImageData(field, project.contourColorBands, parseFloat(alphaSlider.value) / 100), 0, 0,
+      renderFieldImageData(field, project.contourColorBands, parseFloat(alphaSlider.value) / 100, 0.07), 0, 0,
     );
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(off, dx, dy, dw, dh);
@@ -861,8 +927,8 @@ contourPlot.setPainter((world) => {
 
     if (prefs.showContours) {
       const levels = defaultLevels(field.min, field.max);
-      ctx.strokeStyle = 'rgba(25,28,34,0.6)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(18,22,28,0.78)';
+      ctx.lineWidth = 1.15;
       ctx.beginPath();
       for (const level of levels) {
         for (const sgm of contours(field, level)) {
@@ -904,6 +970,8 @@ contourPlot.setPainter((world) => {
   drawTitleBlock(ctx, world, project, `${item.measurements.length} 个测点`);
   if (prefs.showScaleBar) drawScaleBar(ctx, world, worldSize(project).w);
 });
+
+bindPointDrag(contourPlot);
 
 alphaSlider.addEventListener('input', () => {
   const item = current();

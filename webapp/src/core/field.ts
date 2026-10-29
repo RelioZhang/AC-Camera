@@ -189,13 +189,26 @@ export function quantizeStep(bands: number): number {
   return Math.min(MAX_PALETTE_STEPS, Math.max(MIN_PALETTE_STEPS, bands));
 }
 
-export function renderFieldImageData(field: FieldResult, colorBands: number, alpha: number): ImageData {
+/**
+ * 渲染色场为 ImageData。
+ * @param feather 边缘羽化比例（0~0.5）：0 表示硬边；0.12 表示最外 12% 宽度渐隐，
+ *                避免彩图在测点包围盒处出现生硬切口。
+ */
+export function renderFieldImageData(
+  field: FieldResult,
+  colorBands: number,
+  alpha: number,
+  feather = 0,
+): ImageData {
   const { values, resX, resY, min, max } = field;
   const img = new ImageData(resX, resY);
   const range = max - min > 1e-6 ? max - min : 1.0;
   const bands = colorBands >= 2 ? colorBands : 0;
   const steps = bands > 0 ? quantizeStep(bands) : 0;
-  const a = Math.round(alpha * 255);
+  const aBase = alpha * 255;
+  const f = Math.min(0.5, Math.max(0, feather));
+  const fx = f * resX;
+  const fy = f * resY;
   for (let i = 0; i < values.length; i++) {
     const t = Math.min(1, Math.max(0, (values[i] - min) / range));
     let rgb: [number, number, number];
@@ -205,10 +218,20 @@ export function renderFieldImageData(field: FieldResult, colorBands: number, alp
       const band = Math.min(bands - 1, Math.max(0, Math.floor(t * bands)));
       rgb = bandColor(band, bands, steps);
     }
+    // 边缘羽化：按到四边的最小距离做 smoothstep 渐隐
+    let edge = 1;
+    if (f > 0) {
+      const gx = i % resX;
+      const gy = (i - gx) / resX;
+      const dx = Math.min(gx, resX - 1 - gx) / fx;
+      const dy = Math.min(gy, resY - 1 - gy) / fy;
+      const t = Math.min(1, Math.max(0, Math.min(dx, dy)));
+      edge = t * t * (3 - 2 * t);
+    }
     img.data[i * 4] = rgb[0];
     img.data[i * 4 + 1] = rgb[1];
     img.data[i * 4 + 2] = rgb[2];
-    img.data[i * 4 + 3] = a;
+    img.data[i * 4 + 3] = Math.round(aBase * edge);
   }
   return img;
 }
