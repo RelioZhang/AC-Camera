@@ -40,6 +40,7 @@
 (function () {
   const KEY = 'ac-camera-web-data-v2';
   const LAST = 'noiseatlas-last-project';
+  const DEMO_NAME = '演示 · 常减压装置区';
   const qs = new URLSearchParams(location.search);
   const scaleEl = document.getElementById('scale');
   const oxEl = document.getElementById('ox');
@@ -210,7 +211,7 @@
     const worldH = 126;      // 与底图 900×1260 同比例，缩放 1 时刚好铺满纸面
     const project = {
       id,
-      name: '演示 · 常减压装置区',
+      name: DEMO_NAME,
       description: '用于功能演示的示例项目（数值为示例数据）',
       createdAt: now,
       updatedAt: now,
@@ -239,7 +240,17 @@
     });
     const data = [{ project, measurements }];
     try {
-      localStorage.setItem(KEY, JSON.stringify(data));
+      // 只替换同名演示项目，**不动**用户自己的项目
+      let existing = [];
+      try {
+        const raw = localStorage.getItem(KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) existing = parsed;
+        }
+      } catch { /* 解析失败就当空 */ }
+      const kept = existing.filter((x) => x && x.project && x.project.name !== DEMO_NAME);
+      localStorage.setItem(KEY, JSON.stringify([...kept, ...data]));
       localStorage.setItem(LAST, String(id));
     } catch (e) {
       alert('写入本地数据失败（可能空间不足）：' + e.message);
