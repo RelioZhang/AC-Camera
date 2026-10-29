@@ -715,6 +715,9 @@ entryPlot.onRawTap = (u, v) => {
   const item = current();
   if (!item) return;
   const { project } = item;
+  // 只在「纸张 ∪ 底图」范围内落点：点在画布留白处属于误触
+  const c = entryPlot.contentRect;
+  if (u < c.u0 - 0.004 || u > c.u1 + 0.004 || v < c.v0 - 0.004 || v > c.v1 + 0.004) return;
   const pos = pxToMeters(entryPlot.worldRect(), project, u, v);
   const ws = worldSize(project);
   const hitR = Math.hypot(ws.w, ws.h) * 0.022;   // 命中半径（米）
@@ -1388,6 +1391,8 @@ contourPlot.onRawTap = async (u, v) => {
     setCalibMode(false);
     return;
   }
+  const cc = contourPlot.contentRect;
+  if (u < cc.u0 - 0.004 || u > cc.u1 + 0.004 || v < cc.v0 - 0.004 || v > cc.v1 + 0.004) return;
   calibPts.push({ u, v });
   if (calibPts.length === 1) {
     contourPlot.paint();
