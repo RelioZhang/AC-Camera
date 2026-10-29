@@ -10,7 +10,7 @@ export interface Transform {
   panY: number;
 }
 
-export const MIN_ZOOM = 0.2;
+export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 20;
 
 export class PlotCanvas {
@@ -233,23 +233,29 @@ export class PlotCanvas {
     const w = rect.width * z;
     const h = rect.height * z;
     const c = this.contentRect;
+    // 允许把内容拖出视口一点点（15% 视口），这样「刚好看全」时也能微调，
+    // 不会出现"点了拖动毫无反应"的错觉。
+    const slackX = rect.width * 0.15;
+    const slackY = rect.height * 0.15;
 
-    // 内容比视口大：允许平移到内容任一边缘；比对：
-    // 内容左边缘像素 = panX + c.u0*w，要求 <= 0 且右边缘 >= rect.width
-    const minPanX = rect.width - c.u1 * w;
-    const maxPanX = -c.u0 * w;
-    if (w <= rect.width && (c.u1 - c.u0) * w <= rect.width + 0.5) {
-      // 内容比视口窄：居中
-      this.transform.panX = (rect.width - (c.u1 - c.u0) * w) / 2 - c.u0 * w;
+    const cw = (c.u1 - c.u0) * w;
+    const ch = (c.v1 - c.v0) * h;
+
+    // 内容装得下 → 一律居中（此时拖动无意义，强行居中最不别扭）
+    // 内容装不下 → 允许拖到内容边缘，并留 15% 视口余量方便微调
+    if (cw <= rect.width) {
+      this.transform.panX = (rect.width - cw) / 2 - c.u0 * w;
     } else {
+      const maxPanX = -c.u0 * w + slackX;
+      const minPanX = rect.width - c.u1 * w - slackX;
       this.transform.panX = Math.min(maxPanX, Math.max(minPanX, this.transform.panX));
     }
 
-    const minPanY = rect.height - c.v1 * h;
-    const maxPanY = -c.v0 * h;
-    if (h <= rect.height && (c.v1 - c.v0) * h <= rect.height + 0.5) {
-      this.transform.panY = (rect.height - (c.v1 - c.v0) * h) / 2 - c.v0 * h;
+    if (ch <= rect.height) {
+      this.transform.panY = (rect.height - ch) / 2 - c.v0 * h;
     } else {
+      const maxPanY = -c.v0 * h + slackY;
+      const minPanY = rect.height - c.v1 * h - slackY;
       this.transform.panY = Math.min(maxPanY, Math.max(minPanY, this.transform.panY));
     }
   }
@@ -323,6 +329,9 @@ export class PlotCanvas {
   }
 
   paint(): void {
+    // 每次绘制前都夹紧一次：布局变化（抽屉开合、页签切换）后画布尺寸可能已变，
+    // 不夹紧就会出现「内容被推到角落、看起来显示不全」的假象。
+    this.clampPan();
     const { width, height } = this.canvasRect();
     this.ctx.clearRect(0, 0, width, height);
     this.onPaint(this.worldRect(), this.transform);

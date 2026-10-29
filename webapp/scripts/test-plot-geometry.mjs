@@ -128,5 +128,52 @@ console.log('\n[3] 缩到最小时不允许出现「内容比视口还小且跑�
   check('缩到最小时内容水平居中', near(cxContent, cxVp, 1.5), `contentCx=${cxContent} vpCx=${cxVp}`);
 }
 
+console.log('\n[4] 内容比视口略大时可拖到边缘，并保留 15% 余量');
+{
+  // 内容 1.2 倍视口：既能拖动，也不至于拖到"全空"
+  const p = newPlot({ u0: -0.1, v0: -0.1, u1: 1.1, v1: 1.1 });
+  const vp = p.viewport();
+  p.transform.panX = 99999;
+  p.transform.panY = 99999;
+  p.paint();                       // paint 内部会 clampPan
+  const maxPanX = 0.1 * vp.width + 0.15 * vp.width;
+  check('横向余量 = 内容外溢 + 15% 视口', near(p.transform.panX, maxPanX, 2),
+    `panX=${p.transform.panX.toFixed(1)} expect=${maxPanX.toFixed(1)}`);
+  check('纵向同样有余量', p.transform.panY > 0, `panY=${p.transform.panY}`);
+
+  // 反向拖到另一个极限
+  p.transform.panX = -99999;
+  p.paint();
+  const minPanX = vp.width - 1.1 * vp.width - 0.15 * vp.width;
+  check('可拖到内容右边缘', near(p.transform.panX, minPanX, 2),
+    `panX=${p.transform.panX.toFixed(1)} expect=${minPanX.toFixed(1)}`);
+}
+
+console.log('\n[4b] 内容装得下时必须居中（不能贴着一边）');
+{
+  const p = newPlot({ u0: 0, v0: 0, u1: 1, v1: 1 });
+  p.transform.zoom = 0.76;         // 复现用户截图里的缩放
+  p.transform.panY = 60;           // 被推下去的偏移
+  p.paint();
+  const vp = p.viewport();
+  const w = p.worldRect();
+  check('水平居中', near(w.left + w.width / 2, vp.left + vp.width / 2, 1.5),
+    `contentCx=${(w.left + w.width / 2).toFixed(1)} vpCx=${(vp.left + vp.width / 2).toFixed(1)}`);
+  check('垂直居中', near(w.top + w.height / 2, vp.top + vp.height / 2, 1.5),
+    `contentCy=${(w.top + w.height / 2).toFixed(1)} vpCy=${(vp.top + vp.height / 2).toFixed(1)}`);
+}
+
+console.log('\n[5] 底图溢出且缩放不小于 1 时，内容仍可缩到看得全');
+{
+  const content = { u0: -2, v0: -2, u1: 3, v1: 3 };   // 5 倍
+  const p = newPlot(content);
+  p.fit();
+  check('可缩到 0.2 或更低（MIN_ZOOM 已放宽）', p.transform.zoom <= 0.21, `zoom=${p.transform.zoom}`);
+  const vp = p.viewport();
+  const w = p.worldRect();
+  const cw = (content.u1 - content.u0) * w.width;
+  check('内容宽度不超出视口', cw <= vp.width * 1.01, `cw=${cw} vpW=${vp.width}`);
+}
+
 console.log(failures === 0 ? '\nALL PASS\n' : `\n${failures} FAILED\n`);
 process.exit(failures === 0 ? 0 : 1);

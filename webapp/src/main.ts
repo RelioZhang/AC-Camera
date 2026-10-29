@@ -607,6 +607,19 @@ function switchTab(tab: typeof activeTab): void {
   }
   if (tab === 'contour') contourPlot.resize();
   if (tab === 'entry') entryPlot.resize();
+  // 进入等压级图时，若当前缩放装不下全部内容（底图定标后常见），自动适配一次，
+  // 避免「一进来就看到被裁掉一半」。
+  if (tab === 'contour') {
+    requestAnimationFrame(() => {
+      const plot = contourPlot;
+      const w = plot.worldRect();
+      const c = plot.contentRect;
+      const vp = plot.viewport();
+      const cw = (c.u1 - c.u0) * w.width;
+      const ch = (c.v1 - c.v0) * w.height;
+      if (cw > vp.width + 2 || ch > vp.height + 2) plot.fit();
+    });
+  }
   document.querySelectorAll('#m-nav .m-tab[data-tab]').forEach((b) => {
     b.classList.toggle('active', (b as HTMLElement).dataset.tab === tab);
   });
